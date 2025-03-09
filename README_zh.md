@@ -44,7 +44,9 @@ require("shadow-play").setup({
     -- 配置选项
     auto_reload = true,      -- 文件修改后自动重新加载
     sync_interval = 1000,    -- 同步间隔（毫秒）
-    socket_path = vim.fn.stdpath("data") .. "/shadow-play.sock"  -- Unix domain socket 路径
+    socket_path = vim.fn.stdpath("data") .. "/shadow-play.sock",  -- Unix domain socket 路径
+    debug = false,           -- 是否启用调试日志
+    log_file = vim.fn.stdpath("cache") .. "/shadow-play.log"      -- 日志文件路径
 })
 ```
 
@@ -54,7 +56,19 @@ require("shadow-play").setup({
 
 - `shadowPlay.autoReload`: 文件修改后是否自动重新加载
 - `shadowPlay.syncInterval`: 同步间隔（毫秒）
-- `shadowPlay.socketPath`: Unix domain socket 路径
+- `shadowPlay.socketPath`: Unix domain socket 路径，**必须与 Neovim 配置中的 socket_path 保持一致**
+
+#### Socket 路径配置说明
+
+`socket_path` 是 Neovim 和 VSCode/Cursor 之间通信的关键配置项。默认配置：
+
+- Neovim: `~/.local/share/nvim/shadow-play.sock`（Linux/macOS）
+- VSCode/Cursor: 需要配置相同的路径
+
+注意事项：
+1. 两边的 `socket_path` 必须配置相同的路径
+2. 该路径必须对两个编辑器都有读写权限
+3. 如果修改了默认路径，请确保新路径所在目录存在且有正确的权限
 
 ## 🔧 使用方法
 

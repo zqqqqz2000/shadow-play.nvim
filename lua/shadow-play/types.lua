@@ -3,7 +3,9 @@
 ---@class Config
 ---@field auto_reload boolean Whether to automatically reload files after modifications
 ---@field sync_interval number Synchronization interval in milliseconds
----@field socket_path string Unix domain socket path
+---@field socket_path string Unix domain socket path for communication between Neovim and VSCode (default: $XDG_DATA_HOME/shadow-play.sock)
+---@field debug boolean Enable debug logging
+---@field log_file string Path to the log file
 
 ---@class TabInfo
 ---@field path string File path

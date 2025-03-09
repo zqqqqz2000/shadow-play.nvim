@@ -54,4 +54,4 @@ export function deactivate() {
     if (syncManager) {
         syncManager.dispose();
     }
-} 
+}
