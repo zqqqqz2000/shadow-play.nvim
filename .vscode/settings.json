@@ -1,0 +1,12 @@
+{
+    "Lua.runtime.version": "LuaJIT",
+    "Lua.workspace.library": [
+        "/usr/share/nvim/runtime/lua",
+        "/usr/local/share/nvim/runtime/lua",
+        "${env:HOME}/.local/share/nvim/lazy/neodev.nvim/types/stable",
+        "${env:HOME}/.local/share/nvim/lazy/neodev.nvim/types/nightly"
+    ],
+    "Lua.workspace.checkThirdParty": false,
+    "Lua.diagnostics.globals": ["vim"],
+    "Lua.completion.callSnippet": "Replace"
+} 
