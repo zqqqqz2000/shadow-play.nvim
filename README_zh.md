@@ -20,7 +20,7 @@ Shadow Play 是一个强大的编辑器同步插件，支持在 VSCode/Cursor �
 
 ```lua
 {
-    "username/shadow-play.nvim",
+    "zqqqqz2000/shadow-play.nvim",
     event = "VeryLazy",
     config = function()
         require("shadow-play").setup()

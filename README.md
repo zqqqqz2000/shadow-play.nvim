@@ -20,7 +20,7 @@ Install using your favorite plugin manager, for example with [lazy.nvim](https:/
 
 ```lua
 {
-    "username/shadow-play.nvim",
+    "zqqqqz2000/shadow-play.nvim",
     event = "VeryLazy",
     config = function()
         require("shadow-play").setup()
