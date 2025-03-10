@@ -45,6 +45,16 @@ export function activate(context: vscode.ExtensionContext) {
             syncManager.syncBuffer(document.uri.fsPath);
         })
     );
+
+    // Watch for cursor and scroll position changes
+    context.subscriptions.push(
+        vscode.window.onDidChangeTextEditorSelection(e => {
+            syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+        }),
+        vscode.window.onDidChangeTextEditorVisibleRanges(e => {
+            syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+        })
+    );
     
     // Start sync service
     syncManager.start();

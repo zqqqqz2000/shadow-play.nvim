@@ -10,10 +10,11 @@
 ---@class TabInfo
 ---@field path string File path
 ---@field active boolean Whether this is the active window
+---@field viewState ViewState|nil View state information
 
 ---@class Message
----@field type "tabs"|"buffer_change" Message type
----@field data TabInfo[][]|{path: string} Message data
+---@field type "tabs"|"buffer_change"|"view_change" Message type
+---@field data TabInfo[][]|{ path: string, viewState: ViewState|nil } Message data
 
 ---@class Buffer
 ---@field id number Buffer number
@@ -28,4 +29,12 @@
 ---@class Tab
 ---@field id number Tab page number
 ---@field windows Window[] Windows in this tab
----@field active boolean Whether this is the active tab 
+---@field active boolean Whether this is the active tab
+
+---@class Position
+---@field line number
+---@field character number
+
+---@class ViewState
+---@field cursor Position
+---@field scroll { topLine: number, bottomLine: number } 

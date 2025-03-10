@@ -56,10 +56,27 @@ local function get_tabs_info()
             local buf = vim.api.nvim_win_get_buf(win)
             local name = vim.api.nvim_buf_get_name(buf)
             if name ~= "" then
+                -- Get cursor position
+                local cursor = vim.api.nvim_win_get_cursor(win)
+                -- Get window view
+                local view = vim.api.nvim_win_call(win, function()
+                    return vim.fn.winsaveview()
+                end)
+                
                 ---@type TabInfo
                 local tab_info = {
                     path = name,
-                    active = vim.api.nvim_get_current_win() == win
+                    active = vim.api.nvim_get_current_win() == win,
+                    viewState = {
+                        cursor = {
+                            line = cursor[1] - 1, -- Convert to 0-based
+                            character = cursor[2]
+                        },
+                        scroll = {
+                            topLine = view.topline - 1, -- Convert to 0-based
+                            bottomLine = view.topline + vim.api.nvim_win_get_height(win) - 1
+                        }
+                    }
                 }
                 table.insert(buffers, tab_info)
                 log(string.format("Found buffer: %s (active: %s)", name, tostring(tab_info.active)), vim.log.levels.DEBUG)
@@ -204,6 +221,39 @@ function M.init(user_config)
                                     -- Reload to ensure content is up-to-date
                                     vim.cmd("checktime")
                                 end)
+                            end
+                        elseif msg.type == "view_change" then
+                            log("Handling view change from VSCode", vim.log.levels.INFO)
+                            -- Handle view change from VSCode
+                            local data = msg.data
+                            local path = data.path
+                            local viewState = data.viewState
+                            
+                            if viewState then
+                                -- Find the window containing this buffer
+                                for _, win in ipairs(vim.api.nvim_list_wins()) do
+                                    local buf = vim.api.nvim_win_get_buf(win)
+                                    local name = vim.api.nvim_buf_get_name(buf)
+                                    if name == path then
+                                        log(string.format("Updating view state for buffer: %s", path), vim.log.levels.DEBUG)
+                                        
+                                        -- Update cursor position (convert to 1-based)
+                                        vim.api.nvim_win_set_cursor(win, {
+                                            viewState.cursor.line + 1,
+                                            viewState.cursor.character
+                                        })
+                                        
+                                        -- Update scroll position
+                                        vim.api.nvim_win_call(win, function()
+                                            vim.fn.winrestview({
+                                                topline = viewState.scroll.topLine + 1,
+                                                leftcol = 0
+                                            })
+                                        end)
+                                        
+                                        break
+                                    end
+                                end
                             end
                         end
                     end)

@@ -19,5 +19,6 @@ add_to_rtp()
 require('shadow-play').setup(
     {
         debug = false,
+        log_file = '/tmp/shadow-play.log',
     }
 )
