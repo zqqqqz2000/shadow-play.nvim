@@ -83,4 +83,7 @@ luac.out
 *.app
 *.i*86
 *.x86_64
-*.hex 
+*.hex
+
+# Lua init file for debug
+init.lua 
