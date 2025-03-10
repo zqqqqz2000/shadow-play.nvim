@@ -185,7 +185,26 @@ function M.init(user_config)
                             M.handle_tab_sync(msg.data)
                         elseif msg.type == "buffer_change" then
                             log("Handling buffer change from VSCode", vim.log.levels.INFO)
-                            -- TODO: Handle buffer change from VSCode
+                            -- Handle buffer change from VSCode
+                            local path = msg.data.path
+                            log(string.format("Reloading buffer: %s", path), vim.log.levels.DEBUG)
+                            
+                            -- 获取对应的 buffer number
+                            local bufnr = vim.fn.bufnr(path)
+                            if bufnr > 0 then
+                                -- 如果 buffer 已经加载，重新加载它
+                                log(string.format("Buffer found (bufnr: %d), reloading...", bufnr), vim.log.levels.DEBUG)
+                                vim.cmd(string.format("checktime %d", bufnr))
+                            else
+                                -- 如果 buffer 不存在，记录警告并打开文件
+                                log(string.format("Buffer not found for path: %s, opening it...", path), vim.log.levels.WARN)
+                                vim.schedule(function()
+                                    -- 在新缓冲区中打开文件
+                                    vim.cmd(string.format("edit %s", vim.fn.fnameescape(path)))
+                                    -- 重新加载以确保内容是最新的
+                                    vim.cmd("checktime")
+                                end)
+                            end
                         end
                     end)
                 else
