@@ -2,7 +2,7 @@
 local M = {}
 
 ---@type userdata
-local uv = vim.uv or vim.loop -- 兼容 Neovim 0.9 和 0.10+
+local uv = vim.uv or vim.loop -- Compatible with both Neovim 0.9 and 0.10+
 
 ---@type userdata|nil
 local server
@@ -30,10 +30,10 @@ local function log(msg, level)
         msg
     )
     
-    -- 输出到 Neovim 通知系统
+    -- Output to Neovim notification system
     vim.notify(log_msg, level)
     
-    -- 写入日志文件
+    -- Write to log file
     if config.log_file then
         local file = io.open(config.log_file, "a")
         if file then
@@ -189,19 +189,19 @@ function M.init(user_config)
                             local path = msg.data.path
                             log(string.format("Reloading buffer: %s", path), vim.log.levels.DEBUG)
                             
-                            -- 获取对应的 buffer number
+                            -- Get the buffer number
                             local bufnr = vim.fn.bufnr(path)
                             if bufnr > 0 then
-                                -- 如果 buffer 已经加载，重新加载它
+                                -- If buffer is loaded, reload it
                                 log(string.format("Buffer found (bufnr: %d), reloading...", bufnr), vim.log.levels.DEBUG)
                                 vim.cmd(string.format("checktime %d", bufnr))
                             else
-                                -- 如果 buffer 不存在，记录警告并打开文件
+                                -- If buffer doesn't exist, log warning and open it
                                 log(string.format("Buffer not found for path: %s, opening it...", path), vim.log.levels.WARN)
                                 vim.schedule(function()
-                                    -- 在新缓冲区中打开文件
+                                    -- Open file in new buffer
                                     vim.cmd(string.format("edit %s", vim.fn.fnameescape(path)))
-                                    -- 重新加载以确保内容是最新的
+                                    -- Reload to ensure content is up-to-date
                                     vim.cmd("checktime")
                                 end)
                             end
