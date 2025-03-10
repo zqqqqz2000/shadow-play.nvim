@@ -10,10 +10,42 @@ local server
 ---@type Config
 local config
 
--- Enhanced logging function
+---Check if buffer should be ignored
+---@param buf number Buffer handle
+---@return boolean
+local function should_ignore_buffer(buf)
+    local name = vim.api.nvim_buf_get_name(buf)
+    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+
+    return name == "" or
+        buftype == "nofile" or
+        buftype == "terminal" or
+        buftype == "help" or
+        buftype == "quickfix" or
+        buftype == "prompt"
+end
+
+---Get detailed window info for logging
+---@param win number Window handle
+---@return string
+local function get_window_details(win)
+    local buf = vim.api.nvim_win_get_buf(win)
+    local buf_name = vim.api.nvim_buf_get_name(buf)
+
+    if should_ignore_buffer(buf) then
+        buf_name = "[special]"
+    end
+
+    local tab = vim.api.nvim_win_get_tabpage(win)
+    local tab_nr = vim.api.nvim_tabpage_get_number(tab)
+    local win_nr = vim.api.nvim_win_get_number(win)
+    return string.format("tab:%d win:%d buf:%s", tab_nr, win_nr, buf_name)
+end
+
 ---@param msg string
 ---@param level number
-local function log(msg, level)
+---@param win? number Optional window handle for context
+local function log(msg, level, win)
     if not config or not config.debug then return end
 
     level = level or vim.log.levels.INFO
@@ -24,9 +56,15 @@ local function log(msg, level)
         [vim.log.levels.ERROR] = "ERROR"
     })[level] or "INFO"
 
-    local log_msg = string.format("[%s][%s] %s",
+    local context = ""
+    if win then
+        context = "[" .. get_window_details(win) .. "] "
+    end
+
+    local log_msg = string.format("[%s][%s] %s%s",
         os.date("%Y-%m-%d %H:%M:%S"),
         level_str,
+        context,
         msg
     )
 
@@ -58,15 +96,16 @@ local function get_window_view_state(win)
         }
     }
 end
-
 ---Get tab info for a single window
 ---@param win number Window handle
 ---@return TabInfo|nil
 local function get_window_info(win)
     local buf = vim.api.nvim_win_get_buf(win)
-    local name = vim.api.nvim_buf_get_name(buf)
-    if name == "" then return nil end
+    if should_ignore_buffer(buf) then
+        return nil
+    end
 
+    local name = vim.api.nvim_buf_get_name(buf)
     local tab_info = {
         path = name,
         active = vim.api.nvim_get_current_win() == win,
@@ -172,7 +211,7 @@ local function handle_view_change(data)
         local name = vim.api.nvim_buf_get_name(buf)
 
         if name == data.path then
-            log(string.format("Updating view state for buffer: %s", data.path), vim.log.levels.DEBUG)
+            log(string.format("Updating view state for buffer: %s", data.path), vim.log.levels.DEBUG, win)
             update_window_view(win, data.viewState)
             break
         end
@@ -224,8 +263,9 @@ local function handle_tab_sync(tabs)
 
         -- Close extra windows
         for j = #tab_info + 1, #wins do
-            log(string.format("Closing extra window %d in tab %d", j, i), vim.log.levels.DEBUG)
-            vim.api.nvim_win_close(wins[j], true)
+            local win = wins[j]
+            log(string.format("Closing extra window %d in tab %d", j, i), vim.log.levels.DEBUG, win)
+            vim.api.nvim_win_close(win, true)
         end
     end
 
