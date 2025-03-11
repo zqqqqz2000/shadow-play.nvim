@@ -15,7 +15,7 @@ local config
 ---@return boolean
 local function should_ignore_buffer(buf)
     local name = vim.api.nvim_buf_get_name(buf)
-    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+    local buftype = vim.bo[buf].buftype
 
     return name == "" or
         buftype == "nofile" or
@@ -31,10 +31,6 @@ end
 local function get_window_details(win)
     local buf = vim.api.nvim_win_get_buf(win)
     local buf_name = vim.api.nvim_buf_get_name(buf)
-
-    if should_ignore_buffer(buf) then
-        buf_name = "[special]"
-    end
 
     local tab = vim.api.nvim_win_get_tabpage(win)
     local tab_nr = vim.api.nvim_tabpage_get_number(tab)
@@ -101,10 +97,6 @@ end
 ---@return TabInfo|nil
 local function get_window_info(win)
     local buf = vim.api.nvim_win_get_buf(win)
-    if should_ignore_buffer(buf) then
-        return nil
-    end
-
     local name = vim.api.nvim_buf_get_name(buf)
     local tab_info = {
         path = name,
@@ -112,8 +104,29 @@ local function get_window_info(win)
         viewState = get_window_view_state(win)
     }
 
-    log(string.format("Found buffer: %s (active: %s)", name, tostring(tab_info.active)), vim.log.levels.DEBUG)
+    log(string.format("Found buffer: %s (active: %s)", vim.inspect(tab_info), tostring(tab_info.active)),
+    vim.log.levels.DEBUG)
     return tab_info
+end
+
+---Filter out empty tabs and special buffers
+---@param tabs TabInfo[][] Raw tabs information
+---@return TabInfo[][]
+local function filter_tabs(tabs)
+    local filtered = {}
+    for _, tab_info in ipairs(tabs) do
+        local buffers = {}
+        for _, buf_info in ipairs(tab_info) do
+            local bufnr = vim.fn.bufnr(buf_info.path)
+            if bufnr > 0 and not should_ignore_buffer(bufnr) then
+                table.insert(buffers, buf_info)
+            end
+        end
+        if #buffers > 0 then
+            table.insert(filtered, buffers)
+        end
+    end
+    return filtered
 end
 
 ---Get all tabs information
@@ -130,13 +143,10 @@ local function get_tabs_info()
                 table.insert(buffers, info)
             end
         end
-
-        if #buffers > 0 then
-            table.insert(tabs, buffers)
-        end
+        table.insert(tabs, buffers)
     end
 
-    log(string.format("Found %d tabs with buffers", #tabs), vim.log.levels.DEBUG)
+    log(string.format("Found %d tabs", #tabs), vim.log.levels.DEBUG)
     return tabs
 end
 
@@ -226,16 +236,16 @@ end
 local function create_or_update_window(tab, wins, j, buf_info)
     local win = wins[j]
     if not win then
-        log(string.format("Creating new window for buffer: %s", buf_info.path), vim.log.levels.DEBUG)
+        log(string.format("Creating new window for buffer: %s", vim.inspect(buf_info)), vim.log.levels.DEBUG)
         vim.cmd("vsplit")
         win = vim.api.nvim_get_current_win()
     end
 
-    log(string.format("Setting buffer %s in window", buf_info.path), vim.log.levels.DEBUG)
+    log(string.format("Setting buffer %s in window", vim.inspect(buf_info)), vim.log.levels.DEBUG)
     vim.api.nvim_win_set_buf(win, vim.fn.bufnr(buf_info.path, true))
 
     if buf_info.active then
-        log(string.format("Activating window for buffer: %s", buf_info.path), vim.log.levels.DEBUG)
+        log(string.format("Activating window for buffer: %s", vim.inspect(buf_info)), vim.log.levels.DEBUG)
         vim.api.nvim_set_current_win(win)
     end
 
@@ -264,8 +274,13 @@ local function handle_tab_sync(tabs)
         -- Close extra windows
         for j = #tab_info + 1, #wins do
             local win = wins[j]
-            log(string.format("Closing extra window %d in tab %d", j, i), vim.log.levels.DEBUG, win)
-            vim.api.nvim_win_close(win, true)
+            local buf = vim.api.nvim_win_get_buf(win)
+            local buftype = vim.bo[buf].buftype
+            -- Skip special buffer types (like help, quickfix, etc.)
+            if buftype == "" then
+                log(string.format("[tab:%d win:%d buf:%s] Closing extra window %d in tab %d", i, j, buftype, j, i), vim.log.levels.DEBUG)
+                vim.api.nvim_win_close(win, true)
+            end
         end
     end
 
@@ -282,9 +297,13 @@ function M.sync_tabs()
     if not server then return end
     log("Starting tab synchronization", vim.log.levels.INFO)
 
+    local tabs = get_tabs_info()
+    local filtered_tabs = filter_tabs(tabs)
+    log(string.format("Filtered to %d valid tabs", #filtered_tabs), vim.log.levels.DEBUG)
+
     send_message({
         type = "tabs",
-        data = get_tabs_info()
+        data = filtered_tabs
     })
 end
 
@@ -363,6 +382,7 @@ function M.init(user_config)
 
             log(string.format("Received data: %s", chunk), vim.log.levels.DEBUG)
             local success, msg = pcall(vim.json.decode, chunk)
+            log(string.format("Received message: %s", vim.inspect(msg)), vim.log.levels.DEBUG)
 
             if not success or type(msg) ~= "table" then
                 log("Failed to parse received message", vim.log.levels.WARN)
