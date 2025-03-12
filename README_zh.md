@@ -4,10 +4,13 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-Shadow Play 是一个强大的编辑器同步插件，支持在 VSCode/Cursor 和 Neovim 之间实时同步标签页状态。
+Shadow Play 是一个强大的编辑器集成插件，让你可以在 VSCode/Cursor 中使用 Neovim 作为嵌入式的 Zen-mode 编辑器。与 VSCode 的 Neovim 插件不同，这是一个真正运行在终端中的 Neovim 实例，为你提供完整、原汁原味的 Neovim 体验。你可以在 Neovim 和 VSCode/Cursor 之间无缝切换，无需额外的终端窗口，同时保持完美的编辑状态同步。
 
 ## ✨ 功能特性
 
+- 在 VSCode/Cursor 中使用 Neovim 作为嵌入式的 Zen-mode 编辑器
+- 在 Neovim 和 VSCode 编辑模式之间无缝切换
+- 无需额外的终端窗口来运行 Neovim
 - 实时同步打开的标签页
 - 同步标签页顺序
 - 同步当前选中的标签页

@@ -4,10 +4,13 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-Shadow Play is a powerful editor synchronization plugin that enables real-time tab state synchronization between VSCode/Cursor and Neovim.
+Shadow Play is a powerful editor integration plugin that lets you use Neovim as an embedded Zen-mode editor within VSCode/Cursor. Unlike VSCode's Neovim plugin, this is a real Neovim instance running in a terminal, giving you the complete, authentic Neovim experience. You can seamlessly switch between Neovim and VSCode/Cursor without needing a separate terminal window, while maintaining perfect synchronization of your editing state.
 
 ## ✨ Features
 
+- Use Neovim as an embedded Zen-mode editor within VSCode/Cursor
+- Seamlessly switch between Neovim and VSCode editing modes
+- No separate terminal window needed to host Neovim
 - Real-time synchronization of open tabs
 - Synchronization of tab order
 - Synchronization of active tab selection
