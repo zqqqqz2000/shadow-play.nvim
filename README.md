@@ -1,5 +1,7 @@
 # Shadow Play
 
+> ⚠️ **Project Status**: Work in Progress - This project is under active development and not yet ready for production use. Features and APIs may change without notice.
+
 [English](README.md) | [中文](README_zh.md)
 
 Shadow Play is a powerful editor synchronization plugin that enables real-time tab state synchronization between VSCode/Cursor and Neovim.

@@ -1,5 +1,7 @@
 # Shadow Play
 
+> ⚠️ **项目状态**: 开发中 - 本项目正在积极开发中，尚未准备好用于生产环境。功能和 API 可能会随时更改，恕不另行通知。
+
 [English](README.md) | [中文](README_zh.md)
 
 Shadow Play 是一个强大的编辑器同步插件，支持在 VSCode/Cursor 和 Neovim 之间实时同步标签页状态。
