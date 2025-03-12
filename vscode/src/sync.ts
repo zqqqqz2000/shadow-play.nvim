@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as net from 'net';
 import * as os from 'os';
+import * as path from 'path';
 
 interface Config {
     autoReload: boolean;
@@ -47,6 +48,7 @@ export class SyncManager {
     private client: net.Socket | null = null;
     private disposables: vscode.Disposable[] = [];
     private logger: Logger;
+    private outputChannel: vscode.OutputChannel;
 
     constructor(config: Config) {
         this.config = this.normalizeConfig(config);
@@ -61,12 +63,21 @@ export class SyncManager {
             warn: (message: string) => console.warn(`[WARN] ${message}`),
             error: (message: string) => console.error(`[ERROR] ${message}`)
         };
+        this.outputChannel = vscode.window.createOutputChannel('Shadow Play');
+        this.outputChannel.show();
+        this.log('Shadow Play initialized');
     }
 
     private normalizeConfig(config: Config): Config {
+        // Use workspace root directory if available
+        let socketPath = config.socketPath;
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            socketPath = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, 'shadow-play.sock');
+        }
+        
         return {
             ...config,
-            socketPath: config.socketPath.replace('~', os.homedir())
+            socketPath: socketPath.replace('~', os.homedir())
         };
     }
 
@@ -84,27 +95,29 @@ export class SyncManager {
             return;
         }
 
+        this.log('Connecting to Neovim...');
         this.client = net.createConnection(this.config.socketPath)
             .on('connect', () => {
-                console.log('Connected to Neovim');
+                this.log('Connected to Neovim');
                 this.syncTabs();
             })
             .on('error', (err) => {
-                console.error('Connection error:', err);
+                this.log(`Connection error: ${err}`);
                 this.client = null;
                 // Try to reconnect after interval
                 setTimeout(() => this.connect(), this.config.syncInterval);
             })
             .on('data', (data) => {
                 try {
+                    this.log(`Received data: ${data.toString()}`);
                     const message: Message = JSON.parse(data.toString());
                     this.handleMessage(message);
                 } catch (err) {
-                    console.error('Failed to parse message:', err);
+                    this.log(`Failed to parse message: ${err}`);
                 }
             })
             .on('close', () => {
-                console.log('Connection closed');
+                this.log('Connection closed');
                 this.client = null;
                 // Try to reconnect after interval
                 setTimeout(() => this.connect(), this.config.syncInterval);
@@ -357,5 +370,10 @@ export class SyncManager {
             disposable.dispose();
         }
         this.disposables = [];
+    }
+
+    private log(message: string) {
+        const timestamp = new Date().toISOString();
+        this.outputChannel.appendLine(`[${timestamp}] ${message}`);
     }
 } 

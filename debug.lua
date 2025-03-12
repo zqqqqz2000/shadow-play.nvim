@@ -10,7 +10,7 @@ local config = {
     -- Log file path (relative to current directory for development)
     log_file = "shadow-play.log",
     -- Unix domain socket path for IPC
-    socket_path = "/tmp/shadow-play.sock"
+    socket_path = vim.fn.getcwd() .. "/shadow-play.sock"
 }
 
 -- Initialize plugin with debug configuration

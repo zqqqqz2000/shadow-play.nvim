@@ -7,6 +7,9 @@ local uv = vim.uv or vim.loop -- Compatible with both Neovim 0.9 and 0.10+
 ---@type userdata|nil
 local server
 
+---@type userdata|nil
+local client
+
 ---@type Config
 local config
 
@@ -14,6 +17,7 @@ local config
 ---@param buf number Buffer handle
 ---@return boolean
 local function should_ignore_buffer(buf)
+    if buf == nil or buf == -1 then return true end
     local name = vim.api.nvim_buf_get_name(buf)
     local buftype = vim.bo[buf].buftype
 
@@ -154,23 +158,18 @@ end
 ---@param msg Message
 ---@param callback? function Called when message is sent
 local function send_message(msg, callback)
-    if not server then
-        log("Server not initialized, cannot send message", vim.log.levels.WARN)
+    if not client then
+        log("No client connected, cannot send message", vim.log.levels.WARN)
         return
     end
 
     log(string.format("Sending message of type '%s'", msg.type), vim.log.levels.DEBUG)
-    local client = uv.new_pipe()
-
-    client:connect(config.socket_path, function()
-        local json = vim.json.encode(msg)
-        log(string.format("Sending data: %s", json), vim.log.levels.DEBUG)
-        client:write(json)
-        client:shutdown()
-        client:close()
-        log("Message sent successfully", vim.log.levels.DEBUG)
-        if callback then callback() end
-    end)
+    local json = vim.json.encode(msg)
+    log(string.format("Sending data: %s", json), vim.log.levels.DEBUG)
+    
+    client:write(json)
+    log("Message sent successfully", vim.log.levels.DEBUG)
+    if callback then callback() end
 end
 
 ---Handle buffer change from VSCode
@@ -234,19 +233,26 @@ end
 ---@param j number Window index
 ---@param buf_info TabInfo Buffer information
 local function create_or_update_window(tab, wins, j, buf_info)
+    -- Save current tab
+    local current_tab = vim.api.nvim_get_current_tabpage()
     local win = wins[j]
+    
     if not win then
         log(string.format("Creating new window for buffer: %s", vim.inspect(buf_info)), vim.log.levels.DEBUG)
+        vim.api.nvim_set_current_tabpage(tab)
         vim.cmd("vsplit")
         win = vim.api.nvim_get_current_win()
     end
 
-    log(string.format("Setting buffer %s in window", vim.inspect(buf_info)), vim.log.levels.DEBUG)
     vim.api.nvim_win_set_buf(win, vim.fn.bufnr(buf_info.path, true))
 
     if buf_info.active then
         log(string.format("Activating window for buffer: %s", vim.inspect(buf_info)), vim.log.levels.DEBUG)
+        vim.api.nvim_set_current_tabpage(tab)
         vim.api.nvim_set_current_win(win)
+    else
+        -- If window is not active, restore original tab
+        vim.api.nvim_set_current_tabpage(current_tab)
     end
 
     return win
@@ -275,10 +281,9 @@ local function handle_tab_sync(tabs)
         for j = #tab_info + 1, #wins do
             local win = wins[j]
             local buf = vim.api.nvim_win_get_buf(win)
-            local buftype = vim.bo[buf].buftype
-            -- Skip special buffer types (like help, quickfix, etc.)
-            if buftype == "" then
-                log(string.format("[tab:%d win:%d buf:%s] Closing extra window %d in tab %d", i, j, buftype, j, i), vim.log.levels.DEBUG)
+            if not should_ignore_buffer(buf) then
+                local buf_name = vim.api.nvim_buf_get_name(buf)
+                log(string.format("[tab:%d win:%d buf:%s] Closing extra window %d in tab %d", i, j, buf_name, j, i), vim.log.levels.DEBUG)
                 vim.api.nvim_win_close(win, true)
             end
         end
@@ -342,14 +347,16 @@ function M.init(user_config)
     log("Initializing Shadow Play sync service", vim.log.levels.INFO)
 
     server = uv.new_pipe()
-    log(string.format("Using socket path: %s", config.socket_path), vim.log.levels.INFO)
+    -- Ensure using project root directory for socket path
+    local socket_path = config.socket_path or (vim.fn.getcwd() .. "/shadow-play.sock")
+    log(string.format("Using socket path: %s", socket_path), vim.log.levels.INFO)
 
-    if vim.fn.filereadable(config.socket_path) == 1 then
+    if vim.fn.filereadable(socket_path) == 1 then
         log("Removing existing socket file", vim.log.levels.DEBUG)
-        vim.fn.delete(config.socket_path)
+        vim.fn.delete(socket_path)
     end
 
-    local ok, err = server:bind(config.socket_path)
+    local ok, err = server:bind(socket_path)
     if not ok then
         log(string.format("Failed to bind socket: %s", err), vim.log.levels.ERROR)
         return
@@ -363,37 +370,56 @@ function M.init(user_config)
         end
 
         log("Server listening for connections", vim.log.levels.INFO)
-        local client = uv.new_pipe()
-        server:accept(client)
-        log("New client connection accepted", vim.log.levels.DEBUG)
-
-        client:read_start(function(err, chunk)
-            if err then
-                log(string.format("Failed to read data: %s", err), vim.log.levels.ERROR)
+        
+        -- Handle new client connection
+        local function handle_new_client()
+            -- Close existing connection if any
+            if client then
                 client:close()
-                return
+                client = nil
             end
+            
+            client = uv.new_pipe()
+            server:accept(client)
+            log("New client connection accepted", vim.log.levels.DEBUG)
 
-            if not chunk then
-                log("Client disconnected", vim.log.levels.DEBUG)
-                client:close()
-                return
-            end
+            client:read_start(function(err, chunk)
+                if err then
+                    log(string.format("Failed to read data: %s", err), vim.log.levels.ERROR)
+                    client:close()
+                    client = nil
+                    -- Prepare to accept new connection
+                    vim.schedule(handle_new_client)
+                    return
+                end
 
-            log(string.format("Received data: %s", chunk), vim.log.levels.DEBUG)
-            local success, msg = pcall(vim.json.decode, chunk)
-            log(string.format("Received message: %s", vim.inspect(msg)), vim.log.levels.DEBUG)
+                if not chunk then
+                    log("Client disconnected", vim.log.levels.DEBUG)
+                    client:close()
+                    client = nil
+                    -- Prepare to accept new connection
+                    vim.schedule(handle_new_client)
+                    return
+                end
 
-            if not success or type(msg) ~= "table" then
-                log("Failed to parse received message", vim.log.levels.WARN)
-                return
-            end
+                log(string.format("Received data: %s", chunk), vim.log.levels.DEBUG)
+                local success, msg = pcall(vim.json.decode, chunk)
+                log(string.format("Received message: %s", vim.inspect(msg)), vim.log.levels.DEBUG)
 
-            log(string.format("Processing message of type: %s", msg.type), vim.log.levels.DEBUG)
-            vim.schedule(function()
-                handle_message(msg)
+                if not success or type(msg) ~= "table" then
+                    log("Failed to parse received message", vim.log.levels.WARN)
+                    return
+                end
+
+                log(string.format("Processing message of type: %s", msg.type), vim.log.levels.DEBUG)
+                vim.schedule(function()
+                    handle_message(msg)
+                end)
             end)
-        end)
+        end
+
+        -- Start accepting connections
+        handle_new_client()
     end)
 end
 
