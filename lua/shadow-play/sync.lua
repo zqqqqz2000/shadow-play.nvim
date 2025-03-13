@@ -19,9 +19,11 @@ local config
 local function should_ignore_buffer(buf)
     if buf == nil or buf == -1 then return true end
     local name = vim.api.nvim_buf_get_name(buf)
-    local buftype = vim.bo[buf].buftype
+    local bufInfo = vim.bo[buf]
+    local buftype = bufInfo.buftype
 
     return name == "" or
+        bufInfo.path == "" or
         buftype == "nofile" or
         buftype == "terminal" or
         buftype == "help" or
