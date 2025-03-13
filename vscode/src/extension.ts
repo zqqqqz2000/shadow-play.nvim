@@ -49,10 +49,14 @@ export function activate(context: vscode.ExtensionContext) {
     // Watch for cursor and scroll position changes
     context.subscriptions.push(
         vscode.window.onDidChangeTextEditorSelection(e => {
-            syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+            if (!syncManager.isProcessingNeovimMessage()) {
+                syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+            }
         }),
         vscode.window.onDidChangeTextEditorVisibleRanges(e => {
-            syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+            if (!syncManager.isProcessingNeovimMessage()) {
+                syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+            }
         })
     );
     

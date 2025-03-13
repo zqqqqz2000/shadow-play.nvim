@@ -49,6 +49,7 @@ export class SyncManager {
     private disposables: vscode.Disposable[] = [];
     private logger: Logger;
     private outputChannel: vscode.OutputChannel;
+    private isHandlingNeovimMessage: boolean = false;
 
     constructor(config: Config) {
         this.config = this.normalizeConfig(config);
@@ -125,16 +126,23 @@ export class SyncManager {
     }
 
     private async handleMessage(message: Message): Promise<void> {
-        switch (message.type) {
-            case 'tabs':
-                await this.handleTabSync(message.data as TabInfo[][]);
-                break;
-            case 'buffer_change':
-                await this.handleBufferChange(message.data as { path: string });
-                break;
-            case 'view_change':
-                await this.handleViewChange(message.data as { path: string; viewState: ViewState });
-                break;
+        this.isHandlingNeovimMessage = true;
+        try {
+            switch (message.type) {
+                case 'tabs':
+                    await this.handleTabSync(message.data as TabInfo[][]);
+                    break;
+                case 'buffer_change':
+                    await this.handleBufferChange(message.data as { path: string });
+                    break;
+                case 'view_change':
+                    await this.handleViewChange(message.data as { path: string; viewState: ViewState });
+                    break;
+            }
+        } finally {
+            setTimeout(() => {
+                this.isHandlingNeovimMessage = false;
+            }, 100);
         }
     }
 
@@ -319,7 +327,7 @@ export class SyncManager {
     }
 
     public syncViewState(filePath: string): void {
-        if (!this.client) {
+        if (!this.client || this.isHandlingNeovimMessage) {
             return;
         }
 
@@ -432,5 +440,9 @@ export class SyncManager {
     private log(message: string) {
         const timestamp = new Date().toISOString();
         this.outputChannel.appendLine(`[${timestamp}] ${message}`);
+    }
+
+    public isProcessingNeovimMessage(): boolean {
+        return this.isHandlingNeovimMessage;
     }
 } 
