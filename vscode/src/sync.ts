@@ -296,7 +296,7 @@ export class SyncManager {
     }
 
     public syncTabs(): void {
-        if (!this.client) {
+        if (!this.client || this.isHandlingNeovimMessage) {
             return;
         }
 
@@ -308,7 +308,7 @@ export class SyncManager {
     }
 
     public syncBuffer(filePath: string): void {
-        if (!this.client) {
+        if (!this.client || this.isHandlingNeovimMessage) {
             return;
         }
 
