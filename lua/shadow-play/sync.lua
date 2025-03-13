@@ -108,8 +108,6 @@ local function get_window_info(win)
         viewState = get_window_view_state(win)
     }
 
-    log(string.format("Found buffer: %s (active: %s)", vim.inspect(tab_info), tostring(tab_info.active)),
-    vim.log.levels.DEBUG)
     return tab_info
 end
 
@@ -140,19 +138,68 @@ end
 local function get_tabs_info()
     log("Getting current tab information...", vim.log.levels.DEBUG)
     local tabs = {}
+    local buffer_order = {}  -- 用于记录缓冲区顺序
 
+    -- 首先获取当前标签页结构
     for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
         local buffers = {}
         for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
             local info = get_window_info(win)
             if info then
+                local bufnr = vim.fn.bufnr(info.path)
+                if bufnr > 0 then
+                    buffer_order[bufnr] = #buffer_order + 1
+                end
                 table.insert(buffers, info)
             end
         end
         table.insert(tabs, buffers)
     end
 
-    log(string.format("Found %d tabs", #tabs), vim.log.levels.DEBUG)
+    -- 获取所有打开的缓冲区
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if not should_ignore_buffer(buf) then
+            local name = vim.api.nvim_buf_get_name(buf)
+            if name ~= "" then
+                -- 检查这个缓冲区是否已经在标签页中
+                local found = false
+                for _, tab_buffers in ipairs(tabs) do
+                    for _, tab_buf in ipairs(tab_buffers) do
+                        if tab_buf.path == name then
+                            found = true
+                            break
+                        end
+                    end
+                    if found then break end
+                end
+
+                -- 如果缓冲区不在任何标签页中，创建一个新的标签页
+                if not found then
+                    if not buffer_order[buf] then
+                        buffer_order[buf] = #buffer_order + 1
+                    end
+                    local info = {
+                        path = name,
+                        active = false,
+                        viewState = {
+                            cursor = { line = 0, character = 0 },
+                            scroll = { topLine = 0, bottomLine = 0 }
+                        }
+                    }
+                    table.insert(tabs, { info })
+                end
+            end
+        end
+    end
+
+    -- 根据缓冲区顺序对标签页进行排序
+    table.sort(tabs, function(a, b)
+        local a_bufnr = vim.fn.bufnr(a[1].path)
+        local b_bufnr = vim.fn.bufnr(b[1].path)
+        return (buffer_order[a_bufnr] or 999999) < (buffer_order[b_bufnr] or 999999)
+    end)
+
+    log(string.format("Found %d tabs (including %d standalone buffers)", #tabs, #tabs - #vim.api.nvim_list_tabpages()), vim.log.levels.DEBUG)
     return tabs
 end
 
@@ -323,13 +370,20 @@ function M.sync_buffer()
 
     send_message({
         type = "buffer_change",
-        data = { path = path }
+        data = { path = path },
+        from_nvim = true
     })
 end
 
 ---Handle message from VSCode
 ---@param msg Message
 local function handle_message(msg)
+    -- 忽略来自插件的消息
+    if msg.from_nvim then
+        log("Ignoring message from plugin", vim.log.levels.DEBUG)
+        return
+    end
+
     if msg.type == "tabs" then
         log("Handling tab sync from VSCode", vim.log.levels.INFO)
         handle_tab_sync(msg.data)

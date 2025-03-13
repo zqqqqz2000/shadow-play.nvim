@@ -296,7 +296,7 @@ export class SyncManager {
     }
 
     public syncTabs(): void {
-        if (!this.client || this.isHandlingNeovimMessage) {
+        if (!this.client || this.isProcessingNeovimMessage()) {
             return;
         }
 
@@ -308,7 +308,7 @@ export class SyncManager {
     }
 
     public syncBuffer(filePath: string): void {
-        if (!this.client || this.isHandlingNeovimMessage) {
+        if (!this.client || this.isProcessingNeovimMessage()) {
             return;
         }
 
@@ -327,7 +327,7 @@ export class SyncManager {
     }
 
     public syncViewState(filePath: string): void {
-        if (!this.client || this.isHandlingNeovimMessage) {
+        if (!this.client || this.isProcessingNeovimMessage()) {
             return;
         }
 
@@ -411,6 +411,7 @@ export class SyncManager {
         }
 
         try {
+            console.log('Sending message:', message);
             this.client.write(JSON.stringify(message));
         } catch (err) {
             console.error('Failed to send message:', err);

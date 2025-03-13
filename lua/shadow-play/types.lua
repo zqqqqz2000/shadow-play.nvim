@@ -15,6 +15,7 @@
 ---@class Message
 ---@field type "tabs"|"buffer_change"|"view_change" Message type
 ---@field data TabInfo[][]|{ path: string, viewState: ViewState|nil } Message data
+---@field from_nvim boolean Whether the message is from the nvim side plugin
 
 ---@class Buffer
 ---@field id number Buffer number
