@@ -69,15 +69,15 @@ export class SyncManager {
     }
 
     private normalizeConfig(config: Config): Config {
-        // Use workspace root directory if available
+        // Use workspace root directory if socketPath is not specified
         let socketPath = config.socketPath;
-        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        if (!socketPath && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
             socketPath = path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, 'shadow-play.sock');
         }
         
         return {
             ...config,
-            socketPath: socketPath.replace('~', os.homedir())
+            socketPath: socketPath ? socketPath.replace('~', os.homedir()) : ''
         };
     }
 
