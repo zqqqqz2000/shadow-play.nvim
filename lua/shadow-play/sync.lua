@@ -13,24 +13,6 @@ local client
 ---@type Config
 local config
 
----Check if buffer should be ignored
----@param buf number Buffer handle
----@return boolean
-local function should_ignore_buffer(buf)
-    if buf == nil or buf == -1 then return true end
-    local name = vim.api.nvim_buf_get_name(buf)
-    local bufInfo = vim.bo[buf]
-    local buftype = bufInfo.buftype
-
-    return name == "" or
-        bufInfo.path == "" or
-        buftype == "nofile" or
-        buftype == "terminal" or
-        buftype == "help" or
-        buftype == "quickfix" or
-        buftype == "prompt"
-end
-
 ---Get detailed window info for logging
 ---@param win number Window handle
 ---@return string
@@ -80,6 +62,22 @@ local function log(msg, level, win)
     file:close()
 end
 
+---Check if buffer should be ignored
+---@param buf number Buffer handle
+---@return boolean
+local function should_ignore_buffer(buf)
+    if buf == nil or buf == -1 then return true end
+    local name = vim.api.nvim_buf_get_name(buf)
+    local buftype = vim.bo[buf].buftype
+
+    return name == "" or
+        buftype == "nofile" or
+        buftype == "terminal" or
+        buftype == "help" or
+        buftype == "quickfix" or
+        buftype == "prompt"
+end
+
 ---Get view state for a window
 ---@param win number Window handle
 ---@return ViewState
@@ -123,9 +121,11 @@ local function filter_tabs(tabs)
     for _, tab_info in ipairs(tabs) do
         local buffers = {}
         for _, buf_info in ipairs(tab_info) do
-            local bufnr = vim.fn.bufnr(buf_info.path)
-            if bufnr > 0 and not should_ignore_buffer(bufnr) then
-                table.insert(buffers, buf_info)
+            if buf_info.path ~= "" then
+                local bufnr = vim.fn.bufnr(buf_info.path)
+                if bufnr > 0 and not should_ignore_buffer(bufnr) then
+                    table.insert(buffers, buf_info)
+                end
             end
         end
         if #buffers > 0 then
