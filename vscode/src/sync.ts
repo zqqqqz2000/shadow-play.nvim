@@ -138,6 +138,24 @@ export class SyncManager {
         }
     }
 
+    private shouldIgnoreFile(filePath: string): boolean {
+        // 忽略特殊文件
+        const ignoredPatterns = [
+            /^git:\/\/.*/,           // Git 协议文件
+            /^untitled:.*/,          // 未命名文件
+            /^output:.*/,            // 输出窗口
+            /^extension-output-.*/,  // 扩展输出
+            /^markdown-preview-.*/,  // Markdown 预览
+            /^vscode-remote:.*/,     // VSCode 远程文件
+            /^vscode-settings:.*/,   // VSCode 设置
+            /^vscode-workspace:.*/,  // VSCode 工作区
+            /^vscode-extension:.*/,  // VSCode 扩展
+            /^vscode-.*/,            // 其他 VSCode 特殊文件
+        ];
+
+        return ignoredPatterns.some(pattern => pattern.test(filePath));
+    }
+
     private async handleTabSync(tabs: TabInfo[][]): Promise<void> {
         this.logger.debug(`Handling tab sync with ${tabs.length} tabs`);
         
@@ -154,6 +172,12 @@ export class SyncManager {
         for (const tabInfo of tabs) {
             for (const buffer of tabInfo) {
                 try {
+                    // 忽略特殊文件
+                    if (this.shouldIgnoreFile(buffer.path)) {
+                        this.logger.debug(`Ignoring special file: ${buffer.path}`);
+                        continue;
+                    }
+
                     const uri = vscode.Uri.file(buffer.path);
                     processedFiles.add(uri.fsPath);
                     
@@ -191,6 +215,10 @@ export class SyncManager {
                     return false;
                 }
                 const uri = (tab.input as vscode.TabInputText).uri;
+                // 忽略特殊文件
+                if (this.shouldIgnoreFile(uri.toString())) {
+                    return false;
+                }
                 return !processedFiles.has(uri.fsPath);
             });
             
@@ -211,6 +239,12 @@ export class SyncManager {
             return;
         }
 
+        // 忽略特殊文件
+        if (this.shouldIgnoreFile(data.path)) {
+            this.logger.debug(`Ignoring buffer change for special file: ${data.path}`);
+            return;
+        }
+
         const uri = vscode.Uri.file(data.path);
         try {
             const doc = await vscode.workspace.openTextDocument(uri);
@@ -221,6 +255,12 @@ export class SyncManager {
     }
 
     private async handleViewChange(data: { path: string; viewState: ViewState }): Promise<void> {
+        // 忽略特殊文件
+        if (this.shouldIgnoreFile(data.path)) {
+            this.logger.debug(`Ignoring view change for special file: ${data.path}`);
+            return;
+        }
+
         const uri = vscode.Uri.file(data.path);
         const editor = vscode.window.visibleTextEditors.find(
             editor => editor.document.uri.fsPath === uri.fsPath
@@ -264,6 +304,12 @@ export class SyncManager {
             return;
         }
 
+        // 忽略特殊文件
+        if (this.shouldIgnoreFile(filePath)) {
+            this.logger.debug(`Ignoring buffer sync for special file: ${filePath}`);
+            return;
+        }
+
         this.sendMessage({
             type: 'buffer_change',
             data: {
@@ -274,6 +320,12 @@ export class SyncManager {
 
     public syncViewState(filePath: string): void {
         if (!this.client) {
+            return;
+        }
+
+        // 忽略特殊文件
+        if (this.shouldIgnoreFile(filePath)) {
+            this.logger.debug(`Ignoring view state sync for special file: ${filePath}`);
             return;
         }
 
@@ -310,6 +362,11 @@ export class SyncManager {
             for (const tab of group.tabs) {
                 const input = tab.input as vscode.TabInputText;
                 if (input instanceof vscode.TabInputText) {
+                    // 忽略特殊文件
+                    if (this.shouldIgnoreFile(input.uri.toString())) {
+                        continue;
+                    }
+
                     const editor = vscode.window.visibleTextEditors.find(
                         e => e.document.uri.fsPath === input.uri.fsPath
                     );
