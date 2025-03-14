@@ -37,35 +37,16 @@ interface Message {
     from_nvim?: boolean;
 }
 
-interface Logger {
-    debug(message: string): void;
-    info(message: string): void;
-    warn(message: string): void;
-    error(message: string): void;
-}
-
 export class SyncManager {
     private config: Config;
     private client: net.Socket | null = null;
     private disposables: vscode.Disposable[] = [];
-    private logger: Logger;
     private outputChannel: vscode.OutputChannel;
     private isHandlingNeovimMessage: boolean = false;
     private messageBuffer: string = '';  // 添加消息缓冲区
 
     constructor(config: Config) {
         this.config = this.normalizeConfig(config);
-        // Initialize logger
-        this.logger = {
-            debug: (message: string) => {
-                if (vscode.workspace.getConfiguration('shadowPlay').get('debug')) {
-                    console.log(`[DEBUG] ${message}`);
-                }
-            },
-            info: (message: string) => console.log(`[INFO] ${message}`),
-            warn: (message: string) => console.warn(`[WARN] ${message}`),
-            error: (message: string) => console.error(`[ERROR] ${message}`)
-        };
         this.outputChannel = vscode.window.createOutputChannel('Shadow Play');
         this.outputChannel.show();
         this.log('Shadow Play initialized');
@@ -148,6 +129,7 @@ export class SyncManager {
     }
 
     private async handleMessage(message: Message): Promise<void> {
+        this.log(`Handling message: ${message.type}`);
         this.isHandlingNeovimMessage = true;
         try {
             switch (message.type) {
@@ -187,7 +169,7 @@ export class SyncManager {
     }
 
     private async handleTabSync(tabs: TabInfo[][]): Promise<void> {
-        this.logger.debug(`Handling tab sync with ${tabs.length} tabs`);
+        this.log(`Handling tab sync with ${tabs.length} tabs`);
         
         // Get all active text editors
         const editors = vscode.window.tabGroups.all
@@ -204,7 +186,6 @@ export class SyncManager {
                 try {
                     // 忽略特殊文件
                     if (this.shouldIgnoreFile(buffer.path)) {
-                        this.logger.debug(`Ignoring special file: ${buffer.path}`);
                         continue;
                     }
 
@@ -215,7 +196,7 @@ export class SyncManager {
                     const isOpen = editors.some(editor => editor.fsPath === uri.fsPath);
                     
                     if (!isOpen) {
-                        this.logger.debug(`Opening new document: ${buffer.path}`);
+                        this.log(`Opening new document: ${buffer.path}`);
                         // Open the document
                         const doc = await vscode.workspace.openTextDocument(uri);
                         await vscode.window.showTextDocument(doc, {
@@ -223,7 +204,7 @@ export class SyncManager {
                             preserveFocus: !buffer.active
                         });
                     } else if (buffer.active) {
-                        this.logger.debug(`Activating existing document: ${buffer.path}`);
+                        this.log(`Activating existing document: ${buffer.path}`);
                         // Activate existing document if needed
                         const doc = await vscode.workspace.openTextDocument(uri);
                         await vscode.window.showTextDocument(doc, {
@@ -232,7 +213,7 @@ export class SyncManager {
                         });
                     }
                 } catch (error) {
-                    this.logger.error(`Failed to handle buffer ${buffer.path}: ${error}`);
+                    this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
                 }
             }
         }
@@ -241,6 +222,7 @@ export class SyncManager {
         const tabsToClose = vscode.window.tabGroups.all
             .flatMap(group => group.tabs)
             .filter(tab => {
+                this.log(`Checking tab: ${tab.input}`);
                 if (!(tab.input instanceof vscode.TabInputText)) {
                     return false;
                 }
@@ -257,11 +239,11 @@ export class SyncManager {
             try {
                 await vscode.window.tabGroups.close(tab);
             } catch (error) {
-                this.logger.error(`Failed to close tab: ${error}`);
+                this.log(`Failed to close tab: ${error}`);
             }
         }
         
-        this.logger.info('Tab synchronization completed');
+        this.log('Tab synchronization completed');
     }
 
     private async handleBufferChange(data: { path: string }): Promise<void> {
@@ -271,7 +253,6 @@ export class SyncManager {
 
         // 忽略特殊文件
         if (this.shouldIgnoreFile(data.path)) {
-            this.logger.debug(`Ignoring buffer change for special file: ${data.path}`);
             return;
         }
 
@@ -280,14 +261,13 @@ export class SyncManager {
             const doc = await vscode.workspace.openTextDocument(uri);
             await doc.save();
         } catch (err) {
-            console.error('Failed to reload document:', err);
+            this.log(`Failed to reload document: ${err}`);
         }
     }
 
     private async handleViewChange(data: { path: string; viewState: ViewState }): Promise<void> {
         // 忽略特殊文件
         if (this.shouldIgnoreFile(data.path)) {
-            this.logger.debug(`Ignoring view change for special file: ${data.path}`);
             return;
         }
 
@@ -297,7 +277,7 @@ export class SyncManager {
         );
 
         if (editor) {
-            this.logger.debug(`Updating view state for ${data.path}`);
+            this.log(`Updating view state for ${data.path}`);
             
             // Update cursor position
             const position = new vscode.Position(
@@ -336,7 +316,6 @@ export class SyncManager {
 
         // 忽略特殊文件
         if (this.shouldIgnoreFile(filePath)) {
-            this.logger.debug(`Ignoring buffer sync for special file: ${filePath}`);
             return;
         }
 
@@ -355,7 +334,6 @@ export class SyncManager {
 
         // 忽略特殊文件
         if (this.shouldIgnoreFile(filePath)) {
-            this.logger.debug(`Ignoring view state sync for special file: ${filePath}`);
             return;
         }
 
