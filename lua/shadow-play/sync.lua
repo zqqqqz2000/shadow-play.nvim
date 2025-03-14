@@ -13,6 +13,9 @@ local client
 ---@type Config
 local config
 
+---@type string
+local message_buffer = ''  -- 添加消息缓冲区
+
 ---Get detailed window info for logging
 ---@param win number Window handle
 ---@return string
@@ -216,7 +219,8 @@ local function send_message(msg, callback)
     local json = vim.json.encode(msg)
     log(string.format("Sending data: %s", json), vim.log.levels.DEBUG)
     
-    client:write(json)
+    -- 添加 \0 作为结束符
+    client:write(json .. "\0")
     log("Message sent successfully", vim.log.levels.DEBUG)
     if callback then callback() end
 end
@@ -458,19 +462,36 @@ function M.init(user_config)
                     return
                 end
 
-                log(string.format("Received data: %s", chunk), vim.log.levels.DEBUG)
-                local success, msg = pcall(vim.json.decode, chunk)
-                log(string.format("Received message: %s", vim.inspect(msg)), vim.log.levels.DEBUG)
-
-                if not success or type(msg) ~= "table" then
-                    log("Failed to parse received message", vim.log.levels.WARN)
-                    return
+                -- 将新数据添加到缓冲区
+                message_buffer = message_buffer .. chunk
+                
+                -- 处理所有完整的消息
+                while true do
+                    local null_index = message_buffer:find('\0')
+                    if not null_index then
+                        -- 没有找到结束符，等待更多数据
+                        break
+                    end
+                    
+                    -- 提取一个完整的消息
+                    local message_str = message_buffer:sub(1, null_index - 1)
+                    -- 更新缓冲区，移除已处理的消息
+                    message_buffer = message_buffer:sub(null_index + 1)
+                    
+                    if message_str == '' then
+                        goto continue
+                    end
+                    
+                    local ok, message = pcall(vim.json.decode, message_str)
+                    if ok then
+                        log('Received message: ' .. message_str, vim.log.levels.DEBUG)
+                        handle_message(message)
+                    else
+                        log('Failed to parse message: ' .. message, vim.log.levels.ERROR)
+                    end
+                    
+                    ::continue::
                 end
-
-                log(string.format("Processing message of type: %s", msg.type), vim.log.levels.DEBUG)
-                vim.schedule(function()
-                    handle_message(msg)
-                end)
             end)
         end
 
