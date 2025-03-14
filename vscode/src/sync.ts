@@ -34,6 +34,7 @@ interface Message {
         path: string;
         viewState?: ViewState;
     };
+    from_nvim?: boolean;
 }
 
 interface Logger {
@@ -50,6 +51,7 @@ export class SyncManager {
     private logger: Logger;
     private outputChannel: vscode.OutputChannel;
     private isHandlingNeovimMessage: boolean = false;
+    private messageBuffer: string = '';  // 添加消息缓冲区
 
     constructor(config: Config) {
         this.config = this.normalizeConfig(config);
@@ -109,17 +111,37 @@ export class SyncManager {
                 setTimeout(() => this.connect(), this.config.syncInterval);
             })
             .on('data', (data) => {
-                try {
-                    this.log(`Received data: ${data.toString()}`);
-                    const message: Message = JSON.parse(data.toString());
-                    this.handleMessage(message);
-                } catch (err) {
-                    this.log(`Failed to parse message: ${err}`);
+                // 将新数据添加到缓冲区
+                this.messageBuffer += data.toString();
+                
+                // 处理所有完整的消息
+                while (true) {
+                    const nullIndex = this.messageBuffer.indexOf('\0');
+                    if (nullIndex === -1) {
+                        // 没有找到结束符，等待更多数据
+                        break;
+                    }
+                    
+                    // 提取一个完整的消息
+                    const messageStr = this.messageBuffer.substring(0, nullIndex);
+                    // 更新缓冲区，移除已处理的消息
+                    this.messageBuffer = this.messageBuffer.substring(nullIndex + 1);
+                    
+                    if (!messageStr) continue;
+                    
+                    try {
+                        this.log(`Received data: ${messageStr}`);
+                        const message: Message = JSON.parse(messageStr);
+                        this.handleMessage(message);
+                    } catch (err) {
+                        this.log(`Failed to parse message: ${err}`);
+                    }
                 }
             })
             .on('close', () => {
                 this.log('Connection closed');
                 this.client = null;
+                this.messageBuffer = '';  // 清空缓冲区
                 // Try to reconnect after interval
                 setTimeout(() => this.connect(), this.config.syncInterval);
             });
@@ -411,10 +433,11 @@ export class SyncManager {
         }
 
         try {
-            console.log('Sending message:', message);
-            this.client.write(JSON.stringify(message));
+            const messageStr = JSON.stringify(message) + '\0';
+            this.log('Sending message: ' + messageStr);
+            this.client.write(messageStr);
         } catch (err) {
-            console.error('Failed to send message:', err);
+            this.log('Failed to send message: ' + err);
         }
     }
 
