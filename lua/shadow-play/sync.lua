@@ -72,8 +72,12 @@ local function should_ignore_buffer(buf)
     if buf == nil or buf == -1 then return true end
     local name = vim.api.nvim_buf_get_name(buf)
     local buftype = vim.bo[buf].buftype
+    local is_loaded = vim.api.nvim_buf_is_loaded(buf)
+    local is_listed = vim.fn.buflisted(buf) == 1
 
     return name == "" or
+        not is_loaded or
+        not is_listed or
         buftype == "nofile" or
         buftype == "terminal" or
         buftype == "help" or
