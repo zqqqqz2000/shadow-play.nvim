@@ -16,6 +16,12 @@ local config
 ---@type string
 local message_buffer = ''  -- 添加消息缓冲区
 
+--- 添加锁变量
+local is_handling_message = false
+
+---@type function|nil
+local buffer_distribution_algorithm = nil
+
 ---Get detailed window info for logging
 ---@param win number Window handle
 ---@return string
@@ -103,7 +109,8 @@ local function get_window_view_state(win)
         }
     }
 end
----Get tab info for a single window
+
+---Get window info for a single window
 ---@param win number Window handle
 ---@return TabInfo|nil
 local function get_window_info(win)
@@ -118,96 +125,84 @@ local function get_window_info(win)
     return tab_info
 end
 
----Filter out empty tabs and special buffers
----@param tabs TabInfo[][] Raw tabs information
----@return TabInfo[][]
-local function filter_tabs(tabs)
-    local filtered = {}
-    for _, tab_info in ipairs(tabs) do
-        local buffers = {}
-        for _, buf_info in ipairs(tab_info) do
-            if buf_info.path ~= "" then
-                local bufnr = vim.fn.bufnr(buf_info.path)
-                if bufnr > 0 and not should_ignore_buffer(bufnr) then
-                    table.insert(buffers, buf_info)
-                end
-            end
-        end
-        if #buffers > 0 then
-            table.insert(filtered, buffers)
-        end
+---默认的缓冲区分配算法
+---@param buffers string[] 所有缓冲区路径列表
+---@param num_windows number 窗口数量
+---@return string[][] 分配后的缓冲区列表，每个子列表对应一个窗口
+local function default_buffer_distribution(buffers, num_windows)
+    local result = {}
+    for i = 1, num_windows do
+        result[i] = {}
     end
-    return filtered
+
+    -- 如果窗口数量为1，所有缓冲区都分配给这个窗口
+    if num_windows == 1 then
+        result[1] = buffers
+        return result
+    end
+
+    -- 否则，尽量平均分配
+    local current_window = 1
+    for _, buf in ipairs(buffers) do
+        table.insert(result[current_window], buf)
+        current_window = current_window % num_windows + 1
+    end
+
+    return result
 end
 
----Get all tabs information
+---获取当前标签页的所有窗口信息
 ---@return TabInfo[][]
-local function get_tabs_info()
-    log("Getting current tab information...", vim.log.levels.DEBUG)
-    local tabs = {}
-    local buffer_order = {}  -- 用于记录缓冲区顺序
+local function get_windows_info()
+    log("Getting current windows information...", vim.log.levels.DEBUG)
+    local current_tab = vim.api.nvim_get_current_tabpage()
+    local wins = vim.api.nvim_tabpage_list_wins(current_tab)
+    local active_windows = {}
+    local all_buffers = {}
+    local buffer_order = {}
 
-    -- 首先获取当前标签页结构
-    for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
-        local buffers = {}
-        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-            local info = get_window_info(win)
-            if info then
-                local bufnr = vim.fn.bufnr(info.path)
-                if bufnr > 0 then
-                    buffer_order[bufnr] = #buffer_order + 1
-                end
-                table.insert(buffers, info)
-            end
+    -- 收集所有可用的窗口
+    for _, win in ipairs(wins) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        if not should_ignore_buffer(buf) then
+            table.insert(active_windows, win)
         end
-        table.insert(tabs, buffers)
     end
 
-    -- 获取所有打开的缓冲区
+    -- 收集所有打开的缓冲区
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         if not should_ignore_buffer(buf) then
             local name = vim.api.nvim_buf_get_name(buf)
             if name ~= "" then
-                -- 检查这个缓冲区是否已经在标签页中
-                local found = false
-                for _, tab_buffers in ipairs(tabs) do
-                    for _, tab_buf in ipairs(tab_buffers) do
-                        if tab_buf.path == name then
-                            found = true
-                            break
-                        end
-                    end
-                    if found then break end
-                end
-
-                -- 如果缓冲区不在任何标签页中，创建一个新的标签页
-                if not found then
-                    if not buffer_order[buf] then
-                        buffer_order[buf] = #buffer_order + 1
-                    end
-                    local info = {
-                        path = name,
-                        active = false,
-                        viewState = {
-                            cursor = { line = 0, character = 0 },
-                            scroll = { topLine = 0, bottomLine = 0 }
-                        }
-                    }
-                    table.insert(tabs, { info })
-                end
+                table.insert(all_buffers, name)
+                buffer_order[name] = #buffer_order + 1
             end
         end
     end
 
-    -- 根据缓冲区顺序对标签页进行排序
-    table.sort(tabs, function(a, b)
-        local a_bufnr = vim.fn.bufnr(a[1].path)
-        local b_bufnr = vim.fn.bufnr(b[1].path)
-        return (buffer_order[a_bufnr] or 999999) < (buffer_order[b_bufnr] or 999999)
-    end)
+    -- 使用缓冲区分配算法
+    local distribution_func = buffer_distribution_algorithm or default_buffer_distribution
+    local distributed_buffers = distribution_func(all_buffers, #active_windows)
 
-    log(string.format("Found %d tabs (including %d standalone buffers)", #tabs, #tabs - #vim.api.nvim_list_tabpages()), vim.log.levels.DEBUG)
-    return tabs
+    -- 构建最终的窗口信息
+    local windows_info = {}
+    for i, win in ipairs(active_windows) do
+        local window_buffers = {}
+        for _, buf_path in ipairs(distributed_buffers[i] or {}) do
+            local info = {
+                path = buf_path,
+                active = vim.api.nvim_win_get_buf(win) == vim.fn.bufnr(buf_path),
+                viewState = get_window_view_state(win)
+            }
+            table.insert(window_buffers, info)
+        end
+        if #window_buffers > 0 then
+            table.insert(windows_info, window_buffers)
+        end
+    end
+
+    log(string.format("Found %d windows with %d total buffers", #windows_info, #all_buffers), vim.log.levels.DEBUG)
+    return windows_info
 end
 
 ---Send message to VSCode/Cursor
@@ -284,103 +279,94 @@ local function handle_view_change(data)
     end
 end
 
----Create or update a window in a tab
----@param tab number Tab handle
----@param wins number[] Window handles
----@param j number Window index
----@param buf_info TabInfo Buffer information
-local function create_or_update_window(tab, wins, j, buf_info)
-    -- Save current tab
+---Handle editor group synchronization from VSCode/Cursor
+---@param groups TabInfo[][]
+local function handle_editor_group_sync(groups)
+    log(string.format("Starting sync with %d editor groups", #groups), vim.log.levels.INFO)
+
+    -- 首先确保所有需要的 buffer 都已创建
+    local buffers = {}
+    for _, group in ipairs(groups) do
+        for _, buf_info in ipairs(group) do
+            local bufnr = vim.fn.bufnr(buf_info.path)
+            if bufnr == -1 then
+                log(string.format("Creating new buffer for: %s", buf_info.path), vim.log.levels.DEBUG)
+                bufnr = vim.fn.bufnr(buf_info.path, true)
+                vim.api.nvim_buf_set_option(bufnr, 'buflisted', true)
+            end
+            table.insert(buffers, {
+                bufnr = bufnr,
+                path = buf_info.path,
+                active = buf_info.active
+            })
+        end
+    end
+
+    -- 获取当前标签页，如果没有则创建
     local current_tab = vim.api.nvim_get_current_tabpage()
-    local win = wins[j]
-    
-    if not win then
-        log(string.format("Creating new window for buffer: %s", vim.inspect(buf_info)), vim.log.levels.DEBUG)
-        vim.api.nvim_set_current_tabpage(tab)
-        vim.cmd("vsplit")
-        win = vim.api.nvim_get_current_win()
+    local wins = vim.api.nvim_tabpage_list_wins(current_tab)
+    local available_wins = {}
+
+    -- 找出可用的窗口（过滤掉特殊窗口）
+    for _, win in ipairs(wins) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        if not should_ignore_buffer(buf) then
+            table.insert(available_wins, win)
+        end
     end
 
-    vim.api.nvim_win_set_buf(win, vim.fn.bufnr(buf_info.path, true))
+    -- 为每个 group 创建或复用窗口
+    for i, group in ipairs(groups) do
+        local win = available_wins[i]
+        local active_buffer = nil
 
-    if buf_info.active then
-        log(string.format("Activating window for buffer: %s", vim.inspect(buf_info)), vim.log.levels.DEBUG)
-        vim.api.nvim_set_current_tabpage(tab)
-        vim.api.nvim_set_current_win(win)
-    else
-        -- If window is not active, restore original tab
-        vim.api.nvim_set_current_tabpage(current_tab)
-    end
-
-    return win
-end
-
----Handle tab synchronization from VSCode/Cursor
----@param tabs TabInfo[][]
-local function handle_tab_sync(tabs)
-    log(string.format("Starting tab sync with %d tabs", #tabs), vim.log.levels.INFO)
-    local current_tabs = vim.api.nvim_list_tabpages()
-
-    for i, tab_info in ipairs(tabs) do
-        local tab = current_tabs[i]
-        if not tab then
-            log(string.format("Creating new tab %d", i), vim.log.levels.DEBUG)
-            vim.cmd("tabnew")
-            tab = vim.api.nvim_get_current_tabpage()
-        end
-
-        local wins = vim.api.nvim_tabpage_list_wins(tab)
-        for j, buf_info in ipairs(tab_info) do
-            create_or_update_window(tab, wins, j, buf_info)
-        end
-
-        -- Close extra windows
-        for j = #tab_info + 1, #wins do
-            local win = wins[j]
-            local buf = vim.api.nvim_win_get_buf(win)
-            if not should_ignore_buffer(buf) then
-                local buf_name = vim.api.nvim_buf_get_name(buf)
-                log(string.format("[tab:%d win:%d buf:%s] Closing extra window %d in tab %d", i, j, buf_name, j, i), vim.log.levels.DEBUG)
-                vim.api.nvim_win_close(win, true)
+        -- 找到当前 group 中激活的 buffer
+        for _, buf_info in ipairs(group) do
+            if buf_info.active then
+                active_buffer = vim.fn.bufnr(buf_info.path)
+                break
             end
         end
+
+        -- 如果没有找到激活的 buffer，使用第一个
+        if not active_buffer and #group > 0 then
+            active_buffer = vim.fn.bufnr(group[1].path)
+        end
+
+        -- 如果需要创建新窗口
+        if not win then
+            log(string.format("Creating new window for group %d", i), vim.log.levels.DEBUG)
+            -- 第一个窗口不需要分割
+            if i == 1 and #available_wins == 0 then
+                win = vim.api.nvim_get_current_win()
+            else
+                vim.cmd('vsplit')
+                win = vim.api.nvim_get_current_win()
+            end
+            table.insert(available_wins, win)
+        end
+
+        -- 设置窗口显示的 buffer
+        if active_buffer then
+            vim.api.nvim_win_set_buf(win, active_buffer)
+        end
     end
 
-    -- Close extra tabs
-    for i = #tabs + 1, #current_tabs do
-        log(string.format("Closing extra tab %d", i), vim.log.levels.DEBUG)
-        vim.cmd("tabclose " .. i)
+    -- 关闭多余的窗口
+    for i = #groups + 1, #available_wins do
+        local win = available_wins[i]
+        local buf = vim.api.nvim_win_get_buf(win)
+        local buf_name = vim.api.nvim_buf_get_name(buf)
+        log(string.format("Closing extra window with buffer: %s", buf_name), vim.log.levels.DEBUG)
+        vim.api.nvim_win_close(win, true)
     end
 
-    log("Tab synchronization completed", vim.log.levels.INFO)
-end
+    -- 设置窗口布局
+    if #groups > 1 then
+        vim.cmd('windo wincmd =')  -- 平均分配窗口大小
+    end
 
-function M.sync_tabs()
-    if not server then return end
-    log("Starting tab synchronization", vim.log.levels.INFO)
-
-    local tabs = get_tabs_info()
-    local filtered_tabs = filter_tabs(tabs)
-    log(string.format("Filtered to %d valid tabs", #filtered_tabs), vim.log.levels.DEBUG)
-
-    send_message({
-        type = "tabs",
-        data = filtered_tabs
-    })
-end
-
-function M.sync_buffer()
-    if not server then return end
-
-    local current_buf = vim.api.nvim_get_current_buf()
-    local path = vim.api.nvim_buf_get_name(current_buf)
-    log(string.format("Buffer changed: %s", path), vim.log.levels.INFO)
-
-    send_message({
-        type = "buffer_change",
-        data = { path = path },
-        from_nvim = true
-    })
+    log("Editor group synchronization completed", vim.log.levels.INFO)
 end
 
 ---Handle message from VSCode
@@ -392,15 +378,31 @@ local function handle_message(msg)
         return
     end
 
-    if msg.type == "tabs" then
-        log("Handling tab sync from VSCode", vim.log.levels.INFO)
-        handle_tab_sync(msg.data)
-    elseif msg.type == "buffer_change" then
-        log("Handling buffer change from VSCode", vim.log.levels.INFO)
-        handle_buffer_change(msg.data.path)
-    elseif msg.type == "view_change" then
-        log("Handling view change from VSCode", vim.log.levels.INFO)
-        handle_view_change(msg.data)
+    -- 设置锁
+    is_handling_message = true
+    log("Message handling started, lock acquired", vim.log.levels.DEBUG)
+
+    -- 使用 pcall 确保即使出错也能解锁
+    local ok, err = pcall(function()
+        if msg.type == "editor_group" then
+            log("Handling tab sync from VSCode", vim.log.levels.INFO)
+            handle_editor_group_sync(msg.data)
+        elseif msg.type == "buffer_change" then
+            log("Handling buffer change from VSCode", vim.log.levels.INFO)
+            handle_buffer_change(msg.data.path)
+        elseif msg.type == "view_change" then
+            log("Handling view change from VSCode", vim.log.levels.INFO)
+            handle_view_change(msg.data)
+        end
+    end)
+
+    -- 解锁
+    is_handling_message = false
+    log("Message handling completed, lock released", vim.log.levels.DEBUG)
+
+    -- 如果处理过程中出错，记录错误
+    if not ok then
+        log("Error while handling message: " .. tostring(err), vim.log.levels.ERROR)
     end
 end
 
@@ -505,6 +507,30 @@ function M.init(user_config)
         -- Start accepting connections
         handle_new_client()
     end)
+end
+
+---设置自定义的缓冲区分配算法
+---@param func function 自定义的分配算法函数
+function M.set_buffer_distribution_algorithm(func)
+    buffer_distribution_algorithm = func
+end
+
+function M.sync_wins()
+    if not server then return end
+    -- 如果正在处理消息，不触发同步
+    if is_handling_message then
+        log("Skipping window sync while handling message", vim.log.levels.DEBUG)
+        return
+    end
+
+    log("Starting window synchronization", vim.log.levels.INFO)
+
+    local windows_info = get_windows_info()
+    send_message({
+        type = "editor_group",
+        data = windows_info,
+        from_nvim = true
+    })
 end
 
 return M

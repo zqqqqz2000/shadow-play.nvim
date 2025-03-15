@@ -29,7 +29,7 @@ interface TabInfo {
 }
 
 interface Message {
-    type: 'tabs' | 'buffer_change' | 'view_change';
+    type: 'editor_group' | 'buffer_change' | 'view_change';
     data: TabInfo[][] | { 
         path: string;
         viewState?: ViewState;
@@ -83,7 +83,7 @@ export class SyncManager {
         this.client = net.createConnection(this.config.socketPath)
             .on('connect', () => {
                 this.log('Connected to Neovim');
-                this.syncTabs();
+                this.syncEditorGroups();
             })
             .on('error', (err) => {
                 this.log(`Connection error: ${err}`);
@@ -133,8 +133,8 @@ export class SyncManager {
         this.isHandlingNeovimMessage = true;
         try {
             switch (message.type) {
-                case 'tabs':
-                    await this.handleTabSync(message.data as TabInfo[][]);
+                case 'editor_group':
+                    await this.handleEditorGroupSync(message.data as TabInfo[][]);
                     break;
                 case 'buffer_change':
                     await this.handleBufferChange(message.data as { path: string });
@@ -168,21 +168,20 @@ export class SyncManager {
         return ignoredPatterns.some(pattern => pattern.test(filePath));
     }
 
-    private async handleTabSync(tabs: TabInfo[][]): Promise<void> {
-        this.log(`Handling tab sync with ${tabs.length} tabs`);
+    private async handleEditorGroupSync(groups: TabInfo[][]): Promise<void> {
+        this.log(`Handling editor group sync with ${groups.length} groups`);
         
         // Get all active text editors
-        const editors = vscode.window.tabGroups.all
-            .flatMap(group => group.tabs)
-            .filter(tab => tab.input instanceof vscode.TabInputText)
-            .map(tab => (tab.input as vscode.TabInputText).uri);
+        const editors = vscode.window.visibleTextEditors
+            .filter(editor => !this.shouldIgnoreFile(editor.document.uri.toString()));
             
         // Track which files we've processed
         const processedFiles = new Set<string>();
         
-        // Process each tab from Neovim
-        for (const tabInfo of tabs) {
-            for (const buffer of tabInfo) {
+        // Process each group from Neovim
+        for (let i = 0; i < groups.length; i++) {
+            const group = groups[i];
+            for (const buffer of group) {
                 try {
                     // 忽略特殊文件
                     if (this.shouldIgnoreFile(buffer.path)) {
@@ -193,13 +192,14 @@ export class SyncManager {
                     processedFiles.add(uri.fsPath);
                     
                     // Check if file is already open
-                    const isOpen = editors.some(editor => editor.fsPath === uri.fsPath);
+                    const isOpen = editors.some(editor => editor.document.uri.fsPath === uri.fsPath);
                     
                     if (!isOpen) {
                         this.log(`Opening new document: ${buffer.path}`);
                         // Open the document
                         const doc = await vscode.workspace.openTextDocument(uri);
                         await vscode.window.showTextDocument(doc, {
+                            viewColumn: i + 1 as vscode.ViewColumn,
                             preview: false,
                             preserveFocus: !buffer.active
                         });
@@ -208,6 +208,7 @@ export class SyncManager {
                         // Activate existing document if needed
                         const doc = await vscode.workspace.openTextDocument(uri);
                         await vscode.window.showTextDocument(doc, {
+                            viewColumn: i + 1 as vscode.ViewColumn,
                             preview: false,
                             preserveFocus: false
                         });
@@ -218,32 +219,21 @@ export class SyncManager {
             }
         }
         
-        // Close tabs that are not in Neovim
-        const tabsToClose = vscode.window.tabGroups.all
-            .flatMap(group => group.tabs)
-            .filter(tab => {
-                this.log(`Checking tab: ${tab.input}`);
-                if (!(tab.input instanceof vscode.TabInputText)) {
-                    return false;
+        // Close editors that are not in any group
+        for (const editor of editors) {
+            const uri = editor.document.uri;
+            if (!processedFiles.has(uri.fsPath) && !this.shouldIgnoreFile(uri.toString())) {
+                try {
+                    await vscode.window.showTextDocument(editor.document, {
+                        viewColumn: editor.viewColumn,
+                        preview: true
+                    });
+                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+                } catch (error) {
+                    this.log(`Failed to close editor: ${error}`);
                 }
-                const uri = (tab.input as vscode.TabInputText).uri;
-                // 忽略特殊文件
-                if (this.shouldIgnoreFile(uri.toString())) {
-                    return false;
-                }
-                return !processedFiles.has(uri.fsPath);
-            });
-            
-        // Close tabs in reverse order to avoid index shifting
-        for (const tab of tabsToClose.reverse()) {
-            try {
-                await vscode.window.tabGroups.close(tab);
-            } catch (error) {
-                this.log(`Failed to close tab: ${error}`);
             }
         }
-        
-        this.log('Tab synchronization completed');
     }
 
     private async handleBufferChange(data: { path: string }): Promise<void> {
@@ -297,16 +287,60 @@ export class SyncManager {
         }
     }
 
-    public syncTabs(): void {
+    public syncEditorGroups(): void {
         if (!this.client || this.isProcessingNeovimMessage()) {
             return;
         }
 
-        const tabs = this.getTabsInfo();
+        const groups = this.getEditorGroupsInfo();
         this.sendMessage({
-            type: 'tabs',
-            data: tabs
+            type: 'editor_group',
+            data: groups
         });
+    }
+
+    private getEditorGroupsInfo(): TabInfo[][] {
+        const groups: TabInfo[][] = [];
+        const visibleEditors = vscode.window.visibleTextEditors
+            .filter(editor => !this.shouldIgnoreFile(editor.document.uri.toString()));
+
+        // Group editors by their view column
+        const editorsByColumn = new Map<number, vscode.TextEditor[]>();
+        for (const editor of visibleEditors) {
+            const column = editor.viewColumn || 1;
+            if (!editorsByColumn.has(column)) {
+                editorsByColumn.set(column, []);
+            }
+            editorsByColumn.get(column)!.push(editor);
+        }
+
+        // Convert each group to TabInfo[]
+        for (const [column, editors] of editorsByColumn) {
+            const groupTabs: TabInfo[] = [];
+            for (const editor of editors) {
+                const viewState = {
+                    cursor: {
+                        line: editor.selection.active.line,
+                        character: editor.selection.active.character
+                    },
+                    scroll: {
+                        topLine: editor.visibleRanges[0]?.start.line ?? 0,
+                        bottomLine: editor.visibleRanges[0]?.end.line ?? 0
+                    }
+                };
+
+                groupTabs.push({
+                    path: editor.document.uri.fsPath,
+                    active: editor === vscode.window.activeTextEditor,
+                    viewState
+                });
+            }
+            if (groupTabs.length > 0) {
+                groups.push(groupTabs);
+            }
+        }
+
+        return groups;
     }
 
     public syncBuffer(filePath: string): void {
@@ -359,50 +393,6 @@ export class SyncManager {
                 }
             });
         }
-    }
-
-    private getTabsInfo(): TabInfo[][] {
-        const tabs: TabInfo[][] = [];
-        const groups = vscode.window.tabGroups.all;
-
-        for (const group of groups) {
-            const groupTabs: TabInfo[] = [];
-            for (const tab of group.tabs) {
-                const input = tab.input as vscode.TabInputText;
-                if (input instanceof vscode.TabInputText) {
-                    // 忽略特殊文件
-                    if (this.shouldIgnoreFile(input.uri.toString())) {
-                        continue;
-                    }
-
-                    const editor = vscode.window.visibleTextEditors.find(
-                        e => e.document.uri.fsPath === input.uri.fsPath
-                    );
-
-                    const viewState = editor ? {
-                        cursor: {
-                            line: editor.selection.active.line,
-                            character: editor.selection.active.character
-                        },
-                        scroll: {
-                            topLine: editor.visibleRanges[0]?.start.line ?? 0,
-                            bottomLine: editor.visibleRanges[0]?.end.line ?? 0
-                        }
-                    } : undefined;
-
-                    groupTabs.push({
-                        path: input.uri.fsPath,
-                        active: tab === group.activeTab,
-                        viewState
-                    });
-                }
-            }
-            if (groupTabs.length > 0) {
-                tabs.push(groupTabs);
-            }
-        }
-
-        return tabs;
     }
 
     private sendMessage(message: Message): void {

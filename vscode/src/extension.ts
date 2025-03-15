@@ -29,13 +29,13 @@ export function activate(context: vscode.ExtensionContext) {
     // Watch for tab changes
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(() => {
-            syncManager.syncTabs();
+            syncManager.syncEditorGroups();
         }),
         vscode.workspace.onDidCloseTextDocument(() => {
-            syncManager.syncTabs();
+            syncManager.syncEditorGroups();
         }),
         vscode.workspace.onDidOpenTextDocument(() => {
-            syncManager.syncTabs();
+            syncManager.syncEditorGroups();
         })
     );
     

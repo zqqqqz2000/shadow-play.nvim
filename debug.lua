@@ -18,36 +18,42 @@ shadow_play.setup(config)
 
 -- Debug Commands
 vim.api.nvim_create_user_command("ShadowPlaySync", function()
-	require("shadow-play.sync").sync_tabs()
+	require("shadow-play.sync").sync_wins()
 end, {
-	desc = "Manually trigger tab synchronization",
+	desc = "Manually trigger window synchronization",
 })
 
 vim.api.nvim_create_user_command("ShadowPlayStatus", function()
-	-- Display detailed information about current tabs and windows
-	local tabs = vim.api.nvim_list_tabpages()
-	for _, tab in ipairs(tabs) do
-		local tab_num = vim.api.nvim_tabpage_get_number(tab)
-		print(string.format("Tab %d:", tab_num))
+	-- Display detailed information about current windows and buffers
+	local current_tab = vim.api.nvim_get_current_tabpage()
+	local wins = vim.api.nvim_tabpage_list_wins(current_tab)
+	print("Current Windows:")
+	for _, win in ipairs(wins) do
+		local buf = vim.api.nvim_win_get_buf(win)
+		local name = vim.api.nvim_buf_get_name(buf)
+		local win_num = vim.api.nvim_win_get_number(win)
+		local buftype = vim.bo[buf].buftype
+		print(string.format("  Window %d:", win_num))
+		print(string.format("    Buffer: %s", name ~= "" and name or "[No Name]"))
+		print(string.format("    Type: %s", buftype ~= "" and buftype or "normal"))
+	end
 
-		local wins = vim.api.nvim_tabpage_list_wins(tab)
-		for _, win in ipairs(wins) do
-			local buf = vim.api.nvim_win_get_buf(win)
+	print("\nAll Buffers:")
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.fn.buflisted(buf) == 1 then
 			local name = vim.api.nvim_buf_get_name(buf)
-			local win_num = vim.api.nvim_win_get_number(win)
 			local buftype = vim.bo[buf].buftype
-			print(string.format("  Window %d:", win_num))
-			print(string.format("    Buffer: %s", name ~= "" and name or "[No Name]"))
+			print(string.format("  Buffer: %s", name ~= "" and name or "[No Name]"))
 			print(string.format("    Type: %s", buftype ~= "" and buftype or "normal"))
 		end
 	end
 end, {
-	desc = "Display detailed window and tab information",
+	desc = "Display current window and buffer information",
 })
 
 -- Print startup message
 print("Shadow Play debug environment initialized")
 print("Available commands:")
-print("  :ShadowPlaySync  - Manually trigger tab synchronization")
-print("  :ShadowPlayStatus - Display current window and tab information")
+print("  :ShadowPlaySync  - Manually trigger window synchronization")
+print("  :ShadowPlayStatus - Display current window and buffer information")
 print(string.format("Log file: %s", config.log_file))

@@ -59,7 +59,7 @@ function M.setup(user_config)
         group = group,
         callback = function()
             log("Tab change detected")
-            require("shadow-play.sync").sync_tabs()
+            require("shadow-play.sync").sync_wins()
         end,
     })
 
