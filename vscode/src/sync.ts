@@ -281,34 +281,19 @@ export class SyncManager {
             };
         }
 
-        // 多个组，创建分割节点
+        // TODO: 未来完善对嵌套布局的支持，目前简单处理为垂直分割
         const children: WindowLayout[] = [];
-        let totalSize = 0;
-
         for (const group of groups) {
             const child = this.buildWindowLayout([group]);
             if (child) {
-                // 计算分割比例
-                const size = group.viewColumn ? group.viewColumn / groups.length : undefined;
-                if (size) {
-                    totalSize += size;
-                    child.size = size;
-                }
+                // 每个组占据相等的空间
+                child.size = 1 / groups.length;
                 children.push(child);
             }
         }
 
-        // 规范化分割比例
-        if (totalSize > 0) {
-            for (const child of children) {
-                if (child.size) {
-                    child.size = child.size / totalSize;
-                }
-            }
-        }
-
         return {
-            type: groups[0].viewColumn === groups[1].viewColumn ? 'hsplit' : 'vsplit',
+            type: 'vsplit',
             children
         };
     }

@@ -151,8 +151,39 @@ local function default_buffer_distribution(buffers, num_windows)
     return result
 end
 
+---获取窗口的分割类型
+---@param win number 窗口ID
+---@return string "leaf"|"vsplit"|"hsplit"
+local function get_window_split_type(win)
+    if not vim.api.nvim_win_is_valid(win) then
+        return "leaf"
+    end
+    
+    -- 获取相邻窗口
+    local wins = vim.api.nvim_tabpage_list_wins(0)
+    local win_info = vim.fn.getwininfo(win)[1]
+    
+    -- 检查是否有相邻窗口
+    for _, w in ipairs(wins) do
+        if w ~= win then
+            local info = vim.fn.getwininfo(w)[1]
+            -- 如果窗口在同一行但列不同，是垂直分割
+            if info.winrow == win_info.winrow then
+                return "vsplit"
+            end
+            -- 如果窗口在同一列但行不同，是水平分割
+            if info.wincol == win_info.wincol then
+                return "hsplit"
+            end
+        end
+    end
+    
+    return "leaf"
+end
+
+
 ---获取当前标签页的所有窗口信息
----@return TabInfo[][]
+---@return WindowLayout
 local function get_windows_info()
     log("Getting current windows information...", vim.log.levels.DEBUG)
     local current_tab = vim.api.nvim_get_current_tabpage()
@@ -184,8 +215,27 @@ local function get_windows_info()
     local distribution_func = buffer_distribution_algorithm or default_buffer_distribution
     local distributed_buffers = distribution_func(all_buffers, #active_windows)
 
-    -- 构建最终的窗口信息
-    local windows_info = {}
+    -- 如果只有一个窗口，直接返回叶子节点
+    if #active_windows == 1 then
+        local win = active_windows[1]
+        local window_buffers = {}
+        for _, buf_path in ipairs(distributed_buffers[1] or {}) do
+            local info = {
+                path = buf_path,
+                active = vim.api.nvim_win_get_buf(win) == vim.fn.bufnr(buf_path),
+                viewState = get_window_view_state(win)
+            }
+            table.insert(window_buffers, info)
+        end
+        return {
+            type = "leaf",
+            buffers = window_buffers
+        }
+    end
+
+    -- 多个窗口时，根据第一个窗口的分割类型来决定
+    local split_type = get_window_split_type(active_windows[1])
+    local children = {}
     for i, win in ipairs(active_windows) do
         local window_buffers = {}
         for _, buf_path in ipairs(distributed_buffers[i] or {}) do
@@ -197,12 +247,19 @@ local function get_windows_info()
             table.insert(window_buffers, info)
         end
         if #window_buffers > 0 then
-            table.insert(windows_info, window_buffers)
+            table.insert(children, {
+                type = "leaf",
+                buffers = window_buffers,
+                size = 1 / #active_windows  -- 平均分配空间
+            })
         end
     end
 
-    log(string.format("Found %d windows with %d total buffers", #windows_info, #all_buffers), vim.log.levels.DEBUG)
-    return windows_info
+    log(string.format("Found %d windows with %d total buffers", #children, #all_buffers), vim.log.levels.DEBUG)
+    return {
+        type = split_type,
+        children = children
+    }
 end
 
 ---Send message to VSCode/Cursor
@@ -277,36 +334,6 @@ local function handle_view_change(data)
             break
         end
     end
-end
-
----获取窗口的分割类型
----@param win number 窗口ID
----@return string "leaf"|"vsplit"|"hsplit"
-local function get_window_split_type(win)
-    if not vim.api.nvim_win_is_valid(win) then
-        return "leaf"
-    end
-    
-    -- 获取相邻窗口
-    local wins = vim.api.nvim_tabpage_list_wins(0)
-    local win_info = vim.fn.getwininfo(win)[1]
-    
-    -- 检查是否有相邻窗口
-    for _, w in ipairs(wins) do
-        if w ~= win then
-            local info = vim.fn.getwininfo(w)[1]
-            -- 如果窗口在同一行但列不同，是垂直分割
-            if info.winrow == win_info.winrow then
-                return "vsplit"
-            end
-            -- 如果窗口在同一列但行不同，是水平分割
-            if info.wincol == win_info.wincol then
-                return "hsplit"
-            end
-        end
-    end
-    
-    return "leaf"
 end
 
 ---获取窗口的子窗口
