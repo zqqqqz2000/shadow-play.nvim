@@ -50,7 +50,7 @@ export class SyncManager {
     private disposables: vscode.Disposable[] = [];
     private outputChannel: vscode.OutputChannel;
     private isHandlingNeovimMessage: boolean = false;
-    private messageBuffer: string = '';  // 添加消息缓冲区
+    private messageBuffer: string = '';  // Add message buffer
 
     constructor(config: Config) {
         this.config = this.normalizeConfig(config);
@@ -99,20 +99,20 @@ export class SyncManager {
                 setTimeout(() => this.connect(), this.config.syncInterval);
             })
             .on('data', (data) => {
-                // 将新数据添加到缓冲区
+                // Add new data to buffer
                 this.messageBuffer += data.toString();
                 
-                // 处理所有完整的消息
+                // Process all complete messages
                 while (true) {
                     const nullIndex = this.messageBuffer.indexOf('\0');
                     if (nullIndex === -1) {
-                        // 没有找到结束符，等待更多数据
+                        // No end character found, wait for more data
                         break;
                     }
                     
-                    // 提取一个完整的消息
+                    // Extract a complete message
                     const messageStr = this.messageBuffer.substring(0, nullIndex);
-                    // 更新缓冲区，移除已处理的消息
+                    // Update buffer, remove processed message
                     this.messageBuffer = this.messageBuffer.substring(nullIndex + 1);
                     
                     if (!messageStr) continue;
@@ -129,7 +129,7 @@ export class SyncManager {
             .on('close', () => {
                 this.log('Connection closed');
                 this.client = null;
-                this.messageBuffer = '';  // 清空缓冲区
+                this.messageBuffer = '';  // Clear buffer
                 // Try to reconnect after interval
                 setTimeout(() => this.connect(), this.config.syncInterval);
             });
@@ -158,18 +158,18 @@ export class SyncManager {
     }
 
     private shouldIgnoreFile(filePath: string): boolean {
-        // 忽略特殊文件
+        // Ignore special files
         const ignoredPatterns = [
-            /^git:\/\/.*/,           // Git 协议文件
-            /^untitled:.*/,          // 未命名文件
-            /^output:.*/,            // 输出窗口
-            /^extension-output-.*/,  // 扩展输出
-            /^markdown-preview-.*/,  // Markdown 预览
-            /^vscode-remote:.*/,     // VSCode 远程文件
-            /^vscode-settings:.*/,   // VSCode 设置
-            /^vscode-workspace:.*/,  // VSCode 工作区
-            /^vscode-extension:.*/,  // VSCode 扩展
-            /^vscode-.*/,            // 其他 VSCode 特殊文件
+            /^git:\/\/.*/,           // Git protocol files
+            /^untitled:.*/,          // Untitled files
+            /^output:.*/,            // Output windows
+            /^extension-output-.*/,  // Extension outputs
+            /^markdown-preview-.*/,  // Markdown previews
+            /^vscode-remote:.*/,     // VSCode remote files
+            /^vscode-settings:.*/,   // VSCode settings
+            /^vscode-workspace:.*/,  // VSCode workspace
+            /^vscode-extension:.*/,  // VSCode extension
+            /^vscode-.*/,            // Other VSCode special files
         ];
 
         return ignoredPatterns.some(pattern => pattern.test(filePath));
@@ -182,7 +182,7 @@ export class SyncManager {
 
     private async applyWindowLayout(layout: WindowLayout, viewColumn: vscode.ViewColumn = vscode.ViewColumn.One): Promise<void> {
         if (layout.type === 'leaf') {
-            // 处理叶子节点
+            // Handle leaf node
             for (const buffer of layout.buffers || []) {
                 try {
                     if (this.shouldIgnoreFile(buffer.path)) {
@@ -219,7 +219,7 @@ export class SyncManager {
                 }
             }
         } else {
-            // 处理分割节点
+            // Handle split node
             for (let i = 0; i < (layout.children || []).length; i++) {
                 const child = layout.children![i];
                 const nextColumn = layout.type === 'vsplit' 
@@ -244,7 +244,7 @@ export class SyncManager {
         }
 
         if (groups.length === 1) {
-            // 单个组，创建叶子节点
+            // Create a leaf node for a single group
             const buffers: TabInfo[] = [];
             for (const tab of groups[0].tabs) {
                 if (!(tab.input instanceof vscode.TabInputText)) {
@@ -253,7 +253,7 @@ export class SyncManager {
 
                 const editor = vscode.window.visibleTextEditors.find(
                     e => e.document.uri.fsPath === (tab.input as vscode.TabInputText).uri.fsPath
-                    && e.viewColumn === groups[0].viewColumn  // 确保在同一个编辑器组
+                    && e.viewColumn === groups[0].viewColumn  // Ensure editor is in the same group
                 );
 
                 if (editor && !this.shouldIgnoreFile(editor.document.uri.toString())) {
@@ -270,7 +270,7 @@ export class SyncManager {
 
                     buffers.push({
                         path: editor.document.uri.fsPath,
-                        active: tab.isActive,  // 使用 tab 的激活状态
+                        active: tab.isActive,  // Use tab's active state
                         viewState
                     });
                 }
@@ -282,12 +282,12 @@ export class SyncManager {
             };
         }
 
-        // TODO: 未来完善对嵌套布局的支持，目前简单处理为垂直分割
+        // TODO: Future improvement - support nested layouts, currently only handles vertical splits
         const children: WindowLayout[] = [];
         for (const group of groups) {
             const child = this.buildWindowLayout([group]);
             if (child) {
-                // 每个组占据相等的空间
+                // Distribute space equally among groups
                 child.size = 1 / groups.length;
                 children.push(child);
             }
@@ -304,7 +304,7 @@ export class SyncManager {
             return;
         }
 
-        // 忽略特殊文件
+        // Ignore special files
         if (this.shouldIgnoreFile(data.path)) {
             return;
         }
@@ -319,7 +319,7 @@ export class SyncManager {
     }
 
     private async handleViewChange(data: { path: string; viewState: ViewState }): Promise<void> {
-        // 忽略特殊文件
+        // Ignore special files
         if (this.shouldIgnoreFile(data.path)) {
             return;
         }
@@ -367,7 +367,7 @@ export class SyncManager {
             return;
         }
 
-        // 忽略特殊文件
+        // Ignore special files
         if (this.shouldIgnoreFile(filePath)) {
             return;
         }
@@ -385,7 +385,7 @@ export class SyncManager {
             return;
         }
 
-        // 忽略特殊文件
+        // Ignore special files
         if (this.shouldIgnoreFile(filePath)) {
             return;
         }

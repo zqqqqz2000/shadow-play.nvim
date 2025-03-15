@@ -13,10 +13,10 @@
 ---@field viewState ViewState|nil View state information
 
 ---@class WindowLayout
----@field type "leaf"|"vsplit"|"hsplit" 布局类型：叶子节点（单个窗口）或分割类型
----@field buffers TabInfo[] 当前窗口包含的缓冲区（仅当type为leaf时有效）
----@field children WindowLayout[] 子窗口布局（仅当type为vsplit或hsplit时有效）
----@field size number|nil 分割比例（0-1之间的数字，可选）
+---@field type "leaf"|"vsplit"|"hsplit" Layout type: leaf node (single window) or split type
+---@field buffers TabInfo[] Buffers in the current window (only valid when type is leaf)
+---@field children WindowLayout[] Child window layouts (only valid when type is vsplit or hsplit)
+---@field size number|nil Split ratio (number between 0-1, optional)
 
 ---@class Message
 ---@field type "editor_group"|"buffer_change"|"view_change" Message type

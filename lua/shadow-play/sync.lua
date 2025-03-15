@@ -14,9 +14,9 @@ local client
 local config
 
 ---@type string
-local message_buffer = ''  -- 添加消息缓冲区
+local message_buffer = ''  -- Add message buffer
 
---- 添加锁变量
+--- Add lock variable
 local is_handling_message = false
 
 ---@type function|nil
@@ -125,23 +125,23 @@ local function get_window_info(win)
     return tab_info
 end
 
----默认的缓冲区分配算法
----@param buffers string[] 所有缓冲区路径列表
----@param num_windows number 窗口数量
----@return string[][] 分配后的缓冲区列表，每个子列表对应一个窗口
+---Default buffer distribution algorithm
+---@param buffers string[] List of all buffer paths
+---@param num_windows number Number of windows
+---@return string[][] Distributed buffer list, each sublist corresponds to a window
 local function default_buffer_distribution(buffers, num_windows)
     local result = {}
     for i = 1, num_windows do
         result[i] = {}
     end
 
-    -- 如果窗口数量为1，所有缓冲区都分配给这个窗口
+    -- If there's only one window, assign all buffers to it
     if num_windows == 1 then
         result[1] = buffers
         return result
     end
 
-    -- 否则，尽量平均分配
+    -- Otherwise, distribute evenly
     local current_window = 1
     for _, buf in ipairs(buffers) do
         table.insert(result[current_window], buf)
@@ -151,27 +151,27 @@ local function default_buffer_distribution(buffers, num_windows)
     return result
 end
 
----获取窗口的分割类型
----@param win number 窗口ID
+---Get window split type
+---@param win number Window ID
 ---@return string "leaf"|"vsplit"|"hsplit"
 local function get_window_split_type(win)
     if not vim.api.nvim_win_is_valid(win) then
         return "leaf"
     end
     
-    -- 获取相邻窗口
+    -- Get adjacent windows
     local wins = vim.api.nvim_tabpage_list_wins(0)
     local win_info = vim.fn.getwininfo(win)[1]
     
-    -- 检查是否有相邻窗口
+    -- Check for adjacent windows
     for _, w in ipairs(wins) do
         if w ~= win then
             local info = vim.fn.getwininfo(w)[1]
-            -- 如果窗口在同一行但列不同，是垂直分割
+            -- If windows are in the same row but different columns, it's a vertical split
             if info.winrow == win_info.winrow then
                 return "vsplit"
             end
-            -- 如果窗口在同一列但行不同，是水平分割
+            -- If windows are in the same column but different rows, it's a horizontal split
             if info.wincol == win_info.wincol then
                 return "hsplit"
             end
@@ -181,8 +181,28 @@ local function get_window_split_type(win)
     return "leaf"
 end
 
+---Get child windows
+---@param win number Window ID
+---@return number[] List of child window IDs
+local function get_window_children(win)
+    local children = {}
+    local wins = vim.api.nvim_tabpage_list_wins(0)
+    local win_info = vim.fn.getwininfo(win)[1]
+    
+    for _, w in ipairs(wins) do
+        if w ~= win then
+            local info = vim.fn.getwininfo(w)[1]
+            -- Check if it's an adjacent window
+            if info.winrow == win_info.winrow or info.wincol == win_info.wincol then
+                table.insert(children, w)
+            end
+        end
+    end
+    
+    return children
+end
 
----获取当前标签页的所有窗口信息
+---Get current tab page window information
 ---@return WindowLayout
 local function get_windows_info()
     log("Getting current windows information...", vim.log.levels.DEBUG)
@@ -192,7 +212,7 @@ local function get_windows_info()
     local all_buffers = {}
     local buffer_order = {}
 
-    -- 收集所有可用的窗口
+    -- Collect all valid windows
     for _, win in ipairs(wins) do
         local buf = vim.api.nvim_win_get_buf(win)
         if not should_ignore_buffer(buf) then
@@ -200,7 +220,7 @@ local function get_windows_info()
         end
     end
 
-    -- 收集所有打开的缓冲区
+    -- Collect all open buffers
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         if not should_ignore_buffer(buf) then
             local name = vim.api.nvim_buf_get_name(buf)
@@ -211,11 +231,11 @@ local function get_windows_info()
         end
     end
 
-    -- 使用缓冲区分配算法
+    -- Use buffer distribution algorithm
     local distribution_func = buffer_distribution_algorithm or default_buffer_distribution
     local distributed_buffers = distribution_func(all_buffers, #active_windows)
 
-    -- 如果只有一个窗口，直接返回叶子节点
+    -- If there's only one window, return a leaf node
     if #active_windows == 1 then
         local win = active_windows[1]
         local window_buffers = {}
@@ -233,7 +253,7 @@ local function get_windows_info()
         }
     end
 
-    -- 多个窗口时，根据第一个窗口的分割类型来决定
+    -- For multiple windows, determine split type based on first window
     local split_type = get_window_split_type(active_windows[1])
     local children = {}
     for i, win in ipairs(active_windows) do
@@ -250,7 +270,7 @@ local function get_windows_info()
             table.insert(children, {
                 type = "leaf",
                 buffers = window_buffers,
-                size = 1 / #active_windows  -- 平均分配空间
+                size = 1 / #active_windows  -- Equal space distribution
             })
         end
     end
@@ -275,7 +295,7 @@ local function send_message(msg, callback)
     local json = vim.json.encode(msg)
     log(string.format("Sending data: %s", json), vim.log.levels.DEBUG)
     
-    -- 添加 \0 作为结束符
+    -- Add \0 as message terminator
     client:write(json .. "\0")
     log("Message sent successfully", vim.log.levels.DEBUG)
     if callback then callback() end
@@ -336,39 +356,18 @@ local function handle_view_change(data)
     end
 end
 
----获取窗口的子窗口
----@param win number 窗口ID
----@return number[] 子窗口ID列表
-local function get_window_children(win)
-    local children = {}
-    local wins = vim.api.nvim_tabpage_list_wins(0)
-    local win_info = vim.fn.getwininfo(win)[1]
-    
-    for _, w in ipairs(wins) do
-        if w ~= win then
-            local info = vim.fn.getwininfo(w)[1]
-            -- 检查是否是相邻窗口
-            if info.winrow == win_info.winrow or info.wincol == win_info.wincol then
-                table.insert(children, w)
-            end
-        end
-    end
-    
-    return children
-end
-
----递归同步窗口布局
----@param layout WindowLayout 目标布局配置
----@param win? number 当前窗口ID
----@return number 返回同步后的窗口ID
+---Recursively synchronize window layout
+---@param layout WindowLayout Target layout configuration
+---@param win? number Current window ID
+---@return number Returns synchronized window ID
 local function sync_window_layout(layout, win)
-    -- 如果没有提供窗口，从当前标签页同步所有窗口
+    -- If no window provided, sync all windows from current tab
     if not win then
         local current_tab = vim.api.nvim_get_current_tabpage()
         local wins = vim.api.nvim_tabpage_list_wins(current_tab)
         local valid_wins = {}
         
-        -- 收集所有有效窗口
+        -- Collect all valid windows
         for _, w in ipairs(wins) do
             local buf = vim.api.nvim_win_get_buf(w)
             if not should_ignore_buffer(buf) then
@@ -376,16 +375,16 @@ local function sync_window_layout(layout, win)
             end
         end
 
-        -- 如果没有有效窗口，创建一个新窗口
+        -- If no valid windows, create a new one
         if #valid_wins == 0 then
             vim.cmd('new')
             win = vim.api.nvim_get_current_win()
             return sync_window_layout(layout, win)
         end
 
-        -- 比较现有窗口布局和目标布局
+        -- Compare existing window layout with target layout
         if layout.type == "leaf" then
-            -- 如果目标是叶子节点但有多个窗口，关闭多余的窗口
+            -- If target is leaf but have multiple windows, close extra windows
             win = valid_wins[1]
             for i = 2, #valid_wins do
                 if vim.api.nvim_win_is_valid(valid_wins[i]) then
@@ -394,12 +393,12 @@ local function sync_window_layout(layout, win)
             end
             return sync_window_layout(layout, win)
         else
-            -- 对于分割节点，检查分割类型是否匹配
+            -- For split nodes, check if split type matches
             local current_split_type = get_window_split_type(valid_wins[1])
             
-            -- 如果分割类型不匹配或窗口数量不匹配，需要重新创建布局
+            -- If split type or window count doesn't match, recreate layout
             if current_split_type ~= layout.type or #valid_wins ~= #layout.children then
-                -- 保留第一个窗口，关闭其他窗口
+                -- Keep first window, close others
                 win = valid_wins[1]
                 for i = 2, #valid_wins do
                     if vim.api.nvim_win_is_valid(valid_wins[i]) then
@@ -408,13 +407,13 @@ local function sync_window_layout(layout, win)
                 end
                 return sync_window_layout(layout, win)
             else
-                -- 分割类型和窗口数量都匹配，递归同步每个子窗口
+                -- Split type and window count match, recursively sync each child window
                 local wins = {}
                 for i, child_layout in ipairs(layout.children) do
                     wins[i] = sync_window_layout(child_layout, valid_wins[i])
                 end
                 
-                -- 设置窗口大小
+                -- Set window sizes
                 if #wins > 1 then
                     local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
                     for i, w in ipairs(wins) do
@@ -434,7 +433,7 @@ local function sync_window_layout(layout, win)
         end
     end
 
-    -- 确保窗口有效
+    -- Ensure window is valid
     if not vim.api.nvim_win_is_valid(win) then
         vim.cmd('new')
         win = vim.api.nvim_get_current_win()
@@ -443,9 +442,9 @@ local function sync_window_layout(layout, win)
     log(string.format("Syncing window %d with layout type %s", win, layout.type), vim.log.levels.DEBUG)
 
     if layout.type == "leaf" then
-        -- 处理叶子节点
+        -- Handle leaf node
         local active_buffer
-        -- 找到活动缓冲区
+        -- Find active buffer
         for _, buf_info in ipairs(layout.buffers) do
             if buf_info.active then
                 local bufnr = vim.fn.bufnr(buf_info.path)
@@ -454,9 +453,9 @@ local function sync_window_layout(layout, win)
                     vim.bo[bufnr].buflisted = true
                 end
                 active_buffer = bufnr
-                -- 设置缓冲区
+                -- Set buffer
                 vim.api.nvim_win_set_buf(win, bufnr)
-                -- 恢复视图状态
+                -- Restore view state
                 if buf_info.viewState then
                     update_window_view(win, buf_info.viewState)
                 end
@@ -465,7 +464,7 @@ local function sync_window_layout(layout, win)
         end
         return win
     else
-        -- 创建新的分割
+        -- Create new splits
         local wins = {}
         local first_win = win
         
@@ -473,7 +472,7 @@ local function sync_window_layout(layout, win)
             if i == 1 then
                 wins[i] = sync_window_layout(child_layout, first_win)
             else
-                -- 创建新窗口
+                -- Create new window
                 vim.api.nvim_set_current_win(first_win)
                 if layout.type == "vsplit" then
                     vim.cmd('vsplit')
@@ -485,7 +484,7 @@ local function sync_window_layout(layout, win)
             end
         end
         
-        -- 设置窗口大小
+        -- Set window sizes
         if #wins > 1 then
             local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
             for i, w in ipairs(wins) do
@@ -508,7 +507,7 @@ end
 ---@param layout WindowLayout
 local function handle_editor_group_sync(layout)
     log("Starting window layout synchronization", vim.log.levels.INFO)
-    -- 同步窗口布局
+    -- Sync window layout
     sync_window_layout(layout)
     log("Window layout synchronization completed", vim.log.levels.INFO)
 end
@@ -516,17 +515,17 @@ end
 ---Handle message from VSCode
 ---@param msg Message
 local function handle_message(msg)
-    -- 忽略来自插件的消息
+    -- Ignore messages from plugin
     if msg.from_nvim then
         log("Ignoring message from plugin", vim.log.levels.DEBUG)
         return
     end
 
-    -- 设置锁
+    -- Set lock
     is_handling_message = true
     log("Message handling started, lock acquired", vim.log.levels.DEBUG)
 
-    -- 使用 pcall 确保即使出错也能解锁
+    -- Use pcall to ensure lock is released even if error occurs
     local ok, err = pcall(function()
         if msg.type == "editor_group" then
             log("Handling tab sync from VSCode", vim.log.levels.INFO)
@@ -540,11 +539,11 @@ local function handle_message(msg)
         end
     end)
 
-    -- 解锁
+    -- Release lock
     is_handling_message = false
     log("Message handling completed, lock released", vim.log.levels.DEBUG)
 
-    -- 如果处理过程中出错，记录错误
+    -- If error occurred during processing, log it
     if not ok then
         log("Error while handling message: " .. tostring(err), vim.log.levels.ERROR)
     end
@@ -612,20 +611,20 @@ function M.init(user_config)
                     return
                 end
 
-                -- 将新数据添加到缓冲区
+                -- Add new data to buffer
                 message_buffer = message_buffer .. chunk
                 
-                -- 处理所有完整的消息
+                -- Process all complete messages
                 while true do
                     local null_index = message_buffer:find('\0')
                     if not null_index then
-                        -- 没有找到结束符，等待更多数据
+                        -- No end character found, wait for more data
                         break
                     end
                     
-                    -- 提取一个完整的消息
+                    -- Extract a complete message
                     local message_str = message_buffer:sub(1, null_index - 1)
-                    -- 更新缓冲区，移除已处理的消息
+                    -- Update buffer, remove processed message
                     message_buffer = message_buffer:sub(null_index + 1)
                     
                     if message_str == '' then
@@ -635,7 +634,7 @@ function M.init(user_config)
                     local ok, message = pcall(vim.json.decode, message_str)
                     if ok then
                         log('Received message: ' .. message_str, vim.log.levels.DEBUG)
-                        -- 使用 vim.schedule 来处理消息
+                        -- Use vim.schedule to handle message
                         vim.schedule(function()
                             handle_message(message)
                         end)
@@ -653,15 +652,15 @@ function M.init(user_config)
     end)
 end
 
----设置自定义的缓冲区分配算法
----@param func function 自定义的分配算法函数
+---Set custom buffer distribution algorithm
+---@param func function Custom distribution algorithm function
 function M.set_buffer_distribution_algorithm(func)
     buffer_distribution_algorithm = func
 end
 
 function M.sync_wins()
     if not server then return end
-    -- 如果正在处理消息，不触发同步
+    -- Skip sync if handling message
     if is_handling_message then
         log("Skipping window sync while handling message", vim.log.levels.DEBUG)
         return
