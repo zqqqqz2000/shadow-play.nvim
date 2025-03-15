@@ -291,8 +291,8 @@ local function handle_editor_group_sync(groups)
             local bufnr = vim.fn.bufnr(buf_info.path)
             if bufnr == -1 then
                 log(string.format("Creating new buffer for: %s", buf_info.path), vim.log.levels.DEBUG)
-                bufnr = vim.fn.bufnr(buf_info.path, true)
-                vim.api.nvim_buf_set_option(bufnr, 'buflisted', true)
+                bufnr = vim.fn.bufadd(buf_info.path)
+                vim.bo[bufnr].buflisted = true
             end
             table.insert(buffers, {
                 bufnr = bufnr,
@@ -359,11 +359,6 @@ local function handle_editor_group_sync(groups)
         local buf_name = vim.api.nvim_buf_get_name(buf)
         log(string.format("Closing extra window with buffer: %s", buf_name), vim.log.levels.DEBUG)
         vim.api.nvim_win_close(win, true)
-    end
-
-    -- 设置窗口布局
-    if #groups > 1 then
-        vim.cmd('windo wincmd =')  -- 平均分配窗口大小
     end
 
     log("Editor group synchronization completed", vim.log.levels.INFO)
