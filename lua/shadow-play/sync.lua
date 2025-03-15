@@ -362,9 +362,76 @@ end
 ---@param win? number 当前窗口ID
 ---@return number 返回同步后的窗口ID
 local function sync_window_layout(layout, win)
-    -- 如果没有提供窗口，使用当前窗口
+    -- 如果没有提供窗口，从当前标签页同步所有窗口
     if not win then
-        win = vim.api.nvim_get_current_win()
+        local current_tab = vim.api.nvim_get_current_tabpage()
+        local wins = vim.api.nvim_tabpage_list_wins(current_tab)
+        local valid_wins = {}
+        
+        -- 收集所有有效窗口
+        for _, w in ipairs(wins) do
+            local buf = vim.api.nvim_win_get_buf(w)
+            if not should_ignore_buffer(buf) then
+                table.insert(valid_wins, w)
+            end
+        end
+
+        -- 如果没有有效窗口，创建一个新窗口
+        if #valid_wins == 0 then
+            vim.cmd('new')
+            win = vim.api.nvim_get_current_win()
+            return sync_window_layout(layout, win)
+        end
+
+        -- 比较现有窗口布局和目标布局
+        if layout.type == "leaf" then
+            -- 如果目标是叶子节点但有多个窗口，关闭多余的窗口
+            win = valid_wins[1]
+            for i = 2, #valid_wins do
+                if vim.api.nvim_win_is_valid(valid_wins[i]) then
+                    vim.api.nvim_win_close(valid_wins[i], true)
+                end
+            end
+            return sync_window_layout(layout, win)
+        else
+            -- 对于分割节点，检查分割类型是否匹配
+            local current_split_type = get_window_split_type(valid_wins[1])
+            
+            -- 如果分割类型不匹配或窗口数量不匹配，需要重新创建布局
+            if current_split_type ~= layout.type or #valid_wins ~= #layout.children then
+                -- 保留第一个窗口，关闭其他窗口
+                win = valid_wins[1]
+                for i = 2, #valid_wins do
+                    if vim.api.nvim_win_is_valid(valid_wins[i]) then
+                        vim.api.nvim_win_close(valid_wins[i], true)
+                    end
+                end
+                return sync_window_layout(layout, win)
+            else
+                -- 分割类型和窗口数量都匹配，递归同步每个子窗口
+                local wins = {}
+                for i, child_layout in ipairs(layout.children) do
+                    wins[i] = sync_window_layout(child_layout, valid_wins[i])
+                end
+                
+                -- 设置窗口大小
+                if #wins > 1 then
+                    local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
+                    for i, w in ipairs(wins) do
+                        if i < #wins and layout.children[i].size and vim.api.nvim_win_is_valid(w) then
+                            local size = math.floor(total_size * layout.children[i].size)
+                            if layout.type == "vsplit" then
+                                vim.api.nvim_win_set_width(w, size)
+                            else
+                                vim.api.nvim_win_set_height(w, size)
+                            end
+                        end
+                    end
+                end
+                
+                return wins[1]
+            end
+        end
     end
 
     -- 确保窗口有效
@@ -398,99 +465,42 @@ local function sync_window_layout(layout, win)
         end
         return win
     else
-        local current_type = get_window_split_type(win)
-        local children = get_window_children(win)
+        -- 创建新的分割
+        local wins = {}
+        local first_win = win
         
-        -- 如果分割类型不同，需要重新创建
-        if current_type ~= layout.type then
-            log(string.format("Split type mismatch: current=%s, target=%s", current_type, layout.type), vim.log.levels.DEBUG)
-            -- 关闭所有子窗口
-            for _, child in ipairs(children) do
-                if vim.api.nvim_win_is_valid(child) then
-                    vim.api.nvim_win_close(child, true)
-                end
-            end
-            
-            -- 创建新的分割
-            local wins = {}
-            local first_win = win
-            
-            for i, child_layout in ipairs(layout.children) do
-                if i == 1 then
-                    wins[i] = sync_window_layout(child_layout, first_win)
+        for i, child_layout in ipairs(layout.children) do
+            if i == 1 then
+                wins[i] = sync_window_layout(child_layout, first_win)
+            else
+                -- 创建新窗口
+                vim.api.nvim_set_current_win(first_win)
+                if layout.type == "vsplit" then
+                    vim.cmd('vsplit')
                 else
-                    -- 创建新窗口
-                    vim.api.nvim_set_current_win(first_win)
-                    if layout.type == "vsplit" then
-                        vim.cmd('vsplit')
-                    else
-                        vim.cmd('split')
-                    end
-                    local new_win = vim.api.nvim_get_current_win()
-                    wins[i] = sync_window_layout(child_layout, new_win)
+                    vim.cmd('split')
                 end
+                local new_win = vim.api.nvim_get_current_win()
+                wins[i] = sync_window_layout(child_layout, new_win)
             end
-            
-            -- 设置窗口大小
-            if #wins > 1 then
-                local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
-                for i, w in ipairs(wins) do
-                    if i < #wins and layout.children[i].size and vim.api.nvim_win_is_valid(w) then
-                        local size = math.floor(total_size * layout.children[i].size)
-                        if layout.type == "vsplit" then
-                            vim.api.nvim_win_set_width(w, size)
-                        else
-                            vim.api.nvim_win_set_height(w, size)
-                        end
-                    end
-                end
-            end
-            
-            return first_win
-        else
-            -- 分割类型相同，递归同步子窗口
-            local wins = {}
-            for i, child_layout in ipairs(layout.children) do
-                if i <= #children and vim.api.nvim_win_is_valid(children[i]) then
-                    -- 复用现有窗口
-                    wins[i] = sync_window_layout(child_layout, children[i])
-                else
-                    -- 创建新窗口
-                    vim.api.nvim_set_current_win(win)
-                    if layout.type == "vsplit" then
-                        vim.cmd('vsplit')
-                    else
-                        vim.cmd('split')
-                    end
-                    local new_win = vim.api.nvim_get_current_win()
-                    wins[i] = sync_window_layout(child_layout, new_win)
-                end
-            end
-            
-            -- 关闭多余的窗口
-            for i = #layout.children + 1, #children do
-                if vim.api.nvim_win_is_valid(children[i]) then
-                    vim.api.nvim_win_close(children[i], true)
-                end
-            end
-            
-            -- 设置窗口大小
-            if #wins > 1 then
-                local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
-                for i, w in ipairs(wins) do
-                    if i < #wins and layout.children[i].size and vim.api.nvim_win_is_valid(w) then
-                        local size = math.floor(total_size * layout.children[i].size)
-                        if layout.type == "vsplit" then
-                            vim.api.nvim_win_set_width(w, size)
-                        else
-                            vim.api.nvim_win_set_height(w, size)
-                        end
-                    end
-                end
-            end
-            
-            return win
         end
+        
+        -- 设置窗口大小
+        if #wins > 1 then
+            local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
+            for i, w in ipairs(wins) do
+                if i < #wins and layout.children[i].size and vim.api.nvim_win_is_valid(w) then
+                    local size = math.floor(total_size * layout.children[i].size)
+                    if layout.type == "vsplit" then
+                        vim.api.nvim_win_set_width(w, size)
+                    else
+                        vim.api.nvim_win_set_height(w, size)
+                    end
+                end
+            end
+        end
+        
+        return first_win
     end
 end
 
@@ -498,18 +508,8 @@ end
 ---@param layout WindowLayout
 local function handle_editor_group_sync(layout)
     log("Starting window layout synchronization", vim.log.levels.INFO)
-
-    -- 保存当前窗口
-    local current_win = vim.api.nvim_get_current_win()
-
     -- 同步窗口布局
     sync_window_layout(layout)
-
-    -- 恢复当前窗口（如果还有效）
-    if vim.api.nvim_win_is_valid(current_win) then
-        vim.api.nvim_set_current_win(current_win)
-    end
-
     log("Window layout synchronization completed", vim.log.levels.INFO)
 end
 

@@ -253,6 +253,7 @@ export class SyncManager {
 
                 const editor = vscode.window.visibleTextEditors.find(
                     e => e.document.uri.fsPath === (tab.input as vscode.TabInputText).uri.fsPath
+                    && e.viewColumn === groups[0].viewColumn  // 确保在同一个编辑器组
                 );
 
                 if (editor && !this.shouldIgnoreFile(editor.document.uri.toString())) {
@@ -269,7 +270,7 @@ export class SyncManager {
 
                     buffers.push({
                         path: editor.document.uri.fsPath,
-                        active: editor === vscode.window.activeTextEditor,
+                        active: tab.isActive,  // 使用 tab 的激活状态
                         viewState
                     });
                 }
