@@ -279,89 +279,211 @@ local function handle_view_change(data)
     end
 end
 
----Handle editor group synchronization from VSCode/Cursor
----@param groups TabInfo[][]
-local function handle_editor_group_sync(groups)
-    log(string.format("Starting sync with %d editor groups", #groups), vim.log.levels.INFO)
-
-    -- 首先确保所有需要的 buffer 都已创建
-    local buffers = {}
-    for _, group in ipairs(groups) do
-        for _, buf_info in ipairs(group) do
-            local bufnr = vim.fn.bufnr(buf_info.path)
-            if bufnr == -1 then
-                log(string.format("Creating new buffer for: %s", buf_info.path), vim.log.levels.DEBUG)
-                bufnr = vim.fn.bufadd(buf_info.path)
-                vim.bo[bufnr].buflisted = true
+---获取窗口的分割类型
+---@param win number 窗口ID
+---@return string "leaf"|"vsplit"|"hsplit"
+local function get_window_split_type(win)
+    if not vim.api.nvim_win_is_valid(win) then
+        return "leaf"
+    end
+    
+    -- 获取相邻窗口
+    local wins = vim.api.nvim_tabpage_list_wins(0)
+    local win_info = vim.fn.getwininfo(win)[1]
+    
+    -- 检查是否有相邻窗口
+    for _, w in ipairs(wins) do
+        if w ~= win then
+            local info = vim.fn.getwininfo(w)[1]
+            -- 如果窗口在同一行但列不同，是垂直分割
+            if info.winrow == win_info.winrow then
+                return "vsplit"
             end
-            table.insert(buffers, {
-                bufnr = bufnr,
-                path = buf_info.path,
-                active = buf_info.active
-            })
+            -- 如果窗口在同一列但行不同，是水平分割
+            if info.wincol == win_info.wincol then
+                return "hsplit"
+            end
         end
     end
+    
+    return "leaf"
+end
 
-    -- 获取当前标签页，如果没有则创建
-    local current_tab = vim.api.nvim_get_current_tabpage()
-    local wins = vim.api.nvim_tabpage_list_wins(current_tab)
-    local available_wins = {}
-
-    -- 找出可用的窗口（过滤掉特殊窗口）
-    for _, win in ipairs(wins) do
-        local buf = vim.api.nvim_win_get_buf(win)
-        if not should_ignore_buffer(buf) then
-            table.insert(available_wins, win)
+---获取窗口的子窗口
+---@param win number 窗口ID
+---@return number[] 子窗口ID列表
+local function get_window_children(win)
+    local children = {}
+    local wins = vim.api.nvim_tabpage_list_wins(0)
+    local win_info = vim.fn.getwininfo(win)[1]
+    
+    for _, w in ipairs(wins) do
+        if w ~= win then
+            local info = vim.fn.getwininfo(w)[1]
+            -- 检查是否是相邻窗口
+            if info.winrow == win_info.winrow or info.wincol == win_info.wincol then
+                table.insert(children, w)
+            end
         end
     end
+    
+    return children
+end
 
-    -- 为每个 group 创建或复用窗口
-    for i, group in ipairs(groups) do
-        local win = available_wins[i]
-        local active_buffer = nil
+---递归同步窗口布局
+---@param layout WindowLayout 目标布局配置
+---@param win? number 当前窗口ID
+---@return number 返回同步后的窗口ID
+local function sync_window_layout(layout, win)
+    -- 如果没有提供窗口，使用当前窗口
+    if not win then
+        win = vim.api.nvim_get_current_win()
+    end
 
-        -- 找到当前 group 中激活的 buffer
-        for _, buf_info in ipairs(group) do
+    -- 确保窗口有效
+    if not vim.api.nvim_win_is_valid(win) then
+        vim.cmd('new')
+        win = vim.api.nvim_get_current_win()
+    end
+
+    log(string.format("Syncing window %d with layout type %s", win, layout.type), vim.log.levels.DEBUG)
+
+    if layout.type == "leaf" then
+        -- 处理叶子节点
+        local active_buffer
+        -- 找到活动缓冲区
+        for _, buf_info in ipairs(layout.buffers) do
             if buf_info.active then
-                active_buffer = vim.fn.bufnr(buf_info.path)
+                local bufnr = vim.fn.bufnr(buf_info.path)
+                if bufnr == -1 then
+                    bufnr = vim.fn.bufadd(buf_info.path)
+                    vim.bo[bufnr].buflisted = true
+                end
+                active_buffer = bufnr
+                -- 设置缓冲区
+                vim.api.nvim_win_set_buf(win, bufnr)
+                -- 恢复视图状态
+                if buf_info.viewState then
+                    update_window_view(win, buf_info.viewState)
+                end
                 break
             end
         end
-
-        -- 如果没有找到激活的 buffer，使用第一个
-        if not active_buffer and #group > 0 then
-            active_buffer = vim.fn.bufnr(group[1].path)
-        end
-
-        -- 如果需要创建新窗口
-        if not win then
-            log(string.format("Creating new window for group %d", i), vim.log.levels.DEBUG)
-            -- 第一个窗口不需要分割
-            if i == 1 and #available_wins == 0 then
-                win = vim.api.nvim_get_current_win()
-            else
-                vim.cmd('vsplit')
-                win = vim.api.nvim_get_current_win()
+        return win
+    else
+        local current_type = get_window_split_type(win)
+        local children = get_window_children(win)
+        
+        -- 如果分割类型不同，需要重新创建
+        if current_type ~= layout.type then
+            log(string.format("Split type mismatch: current=%s, target=%s", current_type, layout.type), vim.log.levels.DEBUG)
+            -- 关闭所有子窗口
+            for _, child in ipairs(children) do
+                if vim.api.nvim_win_is_valid(child) then
+                    vim.api.nvim_win_close(child, true)
+                end
             end
-            table.insert(available_wins, win)
-        end
-
-        -- 设置窗口显示的 buffer
-        if active_buffer then
-            vim.api.nvim_win_set_buf(win, active_buffer)
+            
+            -- 创建新的分割
+            local wins = {}
+            local first_win = win
+            
+            for i, child_layout in ipairs(layout.children) do
+                if i == 1 then
+                    wins[i] = sync_window_layout(child_layout, first_win)
+                else
+                    -- 创建新窗口
+                    vim.api.nvim_set_current_win(first_win)
+                    if layout.type == "vsplit" then
+                        vim.cmd('vsplit')
+                    else
+                        vim.cmd('split')
+                    end
+                    local new_win = vim.api.nvim_get_current_win()
+                    wins[i] = sync_window_layout(child_layout, new_win)
+                end
+            end
+            
+            -- 设置窗口大小
+            if #wins > 1 then
+                local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
+                for i, w in ipairs(wins) do
+                    if i < #wins and layout.children[i].size and vim.api.nvim_win_is_valid(w) then
+                        local size = math.floor(total_size * layout.children[i].size)
+                        if layout.type == "vsplit" then
+                            vim.api.nvim_win_set_width(w, size)
+                        else
+                            vim.api.nvim_win_set_height(w, size)
+                        end
+                    end
+                end
+            end
+            
+            return first_win
+        else
+            -- 分割类型相同，递归同步子窗口
+            local wins = {}
+            for i, child_layout in ipairs(layout.children) do
+                if i <= #children and vim.api.nvim_win_is_valid(children[i]) then
+                    -- 复用现有窗口
+                    wins[i] = sync_window_layout(child_layout, children[i])
+                else
+                    -- 创建新窗口
+                    vim.api.nvim_set_current_win(win)
+                    if layout.type == "vsplit" then
+                        vim.cmd('vsplit')
+                    else
+                        vim.cmd('split')
+                    end
+                    local new_win = vim.api.nvim_get_current_win()
+                    wins[i] = sync_window_layout(child_layout, new_win)
+                end
+            end
+            
+            -- 关闭多余的窗口
+            for i = #layout.children + 1, #children do
+                if vim.api.nvim_win_is_valid(children[i]) then
+                    vim.api.nvim_win_close(children[i], true)
+                end
+            end
+            
+            -- 设置窗口大小
+            if #wins > 1 then
+                local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
+                for i, w in ipairs(wins) do
+                    if i < #wins and layout.children[i].size and vim.api.nvim_win_is_valid(w) then
+                        local size = math.floor(total_size * layout.children[i].size)
+                        if layout.type == "vsplit" then
+                            vim.api.nvim_win_set_width(w, size)
+                        else
+                            vim.api.nvim_win_set_height(w, size)
+                        end
+                    end
+                end
+            end
+            
+            return win
         end
     end
+end
 
-    -- 关闭多余的窗口
-    for i = #groups + 1, #available_wins do
-        local win = available_wins[i]
-        local buf = vim.api.nvim_win_get_buf(win)
-        local buf_name = vim.api.nvim_buf_get_name(buf)
-        log(string.format("Closing extra window with buffer: %s", buf_name), vim.log.levels.DEBUG)
-        vim.api.nvim_win_close(win, true)
+---Handle editor group synchronization from VSCode
+---@param layout WindowLayout
+local function handle_editor_group_sync(layout)
+    log("Starting window layout synchronization", vim.log.levels.INFO)
+
+    -- 保存当前窗口
+    local current_win = vim.api.nvim_get_current_win()
+
+    -- 同步窗口布局
+    sync_window_layout(layout)
+
+    -- 恢复当前窗口（如果还有效）
+    if vim.api.nvim_win_is_valid(current_win) then
+        vim.api.nvim_set_current_win(current_win)
     end
 
-    log("Editor group synchronization completed", vim.log.levels.INFO)
+    log("Window layout synchronization completed", vim.log.levels.INFO)
 end
 
 ---Handle message from VSCode
@@ -529,3 +651,4 @@ function M.sync_wins()
 end
 
 return M
+

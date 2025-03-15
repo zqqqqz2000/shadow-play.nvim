@@ -28,9 +28,16 @@ interface TabInfo {
     viewState?: ViewState;
 }
 
+interface WindowLayout {
+    type: 'leaf' | 'vsplit' | 'hsplit';
+    buffers?: TabInfo[];
+    children?: WindowLayout[];
+    size?: number;
+}
+
 interface Message {
     type: 'editor_group' | 'buffer_change' | 'view_change';
-    data: TabInfo[][] | { 
+    data: WindowLayout | { 
         path: string;
         viewState?: ViewState;
     };
@@ -134,7 +141,7 @@ export class SyncManager {
         try {
             switch (message.type) {
                 case 'editor_group':
-                    await this.handleEditorGroupSync(message.data as TabInfo[][]);
+                    await this.handleEditorGroupSync(message.data as WindowLayout);
                     break;
                 case 'buffer_change':
                     await this.handleBufferChange(message.data as { path: string });
@@ -168,72 +175,142 @@ export class SyncManager {
         return ignoredPatterns.some(pattern => pattern.test(filePath));
     }
 
-    private async handleEditorGroupSync(groups: TabInfo[][]): Promise<void> {
-        this.log(`Handling editor group sync with ${groups.length} groups`);
-        
-        // Get all active text editors
-        const editors = vscode.window.visibleTextEditors
-            .filter(editor => !this.shouldIgnoreFile(editor.document.uri.toString()));
-            
-        // Track which files we've processed
-        const processedFiles = new Set<string>();
-        
-        // Process each group from Neovim
-        for (let i = 0; i < groups.length; i++) {
-            const group = groups[i];
-            for (const buffer of group) {
+    private async handleEditorGroupSync(layout: WindowLayout): Promise<void> {
+        this.log(`Handling window layout sync`);
+        await this.applyWindowLayout(layout);
+    }
+
+    private async applyWindowLayout(layout: WindowLayout, viewColumn: vscode.ViewColumn = vscode.ViewColumn.One): Promise<void> {
+        if (layout.type === 'leaf') {
+            // 处理叶子节点
+            for (const buffer of layout.buffers || []) {
                 try {
-                    // 忽略特殊文件
                     if (this.shouldIgnoreFile(buffer.path)) {
                         continue;
                     }
 
                     const uri = vscode.Uri.file(buffer.path);
-                    processedFiles.add(uri.fsPath);
-                    
-                    // Check if file is already open
-                    const isOpen = editors.some(editor => editor.document.uri.fsPath === uri.fsPath);
-                    
-                    if (!isOpen) {
-                        this.log(`Opening new document: ${buffer.path}`);
-                        // Open the document
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        await vscode.window.showTextDocument(doc, {
-                            viewColumn: i + 1 as vscode.ViewColumn,
-                            preview: false,
-                            preserveFocus: !buffer.active
-                        });
-                    } else if (buffer.active) {
-                        this.log(`Activating existing document: ${buffer.path}`);
-                        // Activate existing document if needed
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        await vscode.window.showTextDocument(doc, {
-                            viewColumn: i + 1 as vscode.ViewColumn,
-                            preview: false,
-                            preserveFocus: false
-                        });
+                    const doc = await vscode.workspace.openTextDocument(uri);
+                    await vscode.window.showTextDocument(doc, {
+                        viewColumn,
+                        preview: false,
+                        preserveFocus: !buffer.active
+                    });
+
+                    if (buffer.viewState) {
+                        const editor = vscode.window.activeTextEditor;
+                        if (editor && editor.document.uri.fsPath === uri.fsPath) {
+                            const position = new vscode.Position(
+                                buffer.viewState.cursor.line,
+                                buffer.viewState.cursor.character
+                            );
+                            editor.selection = new vscode.Selection(position, position);
+                            editor.revealRange(
+                                new vscode.Range(
+                                    buffer.viewState.scroll.topLine, 0,
+                                    buffer.viewState.scroll.bottomLine, 0
+                                ),
+                                vscode.TextEditorRevealType.InCenter
+                            );
+                        }
                     }
                 } catch (error) {
                     this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
                 }
             }
+        } else {
+            // 处理分割节点
+            for (let i = 0; i < (layout.children || []).length; i++) {
+                const child = layout.children![i];
+                const nextColumn = layout.type === 'vsplit' 
+                    ? viewColumn + i 
+                    : viewColumn;
+                await this.applyWindowLayout(child, nextColumn);
+            }
         }
-        
-        // Close editors that are not in any group
-        for (const editor of editors) {
-            const uri = editor.document.uri;
-            if (!processedFiles.has(uri.fsPath) && !this.shouldIgnoreFile(uri.toString())) {
-                try {
-                    await vscode.window.showTextDocument(editor.document, {
-                        viewColumn: editor.viewColumn,
-                        preview: true
+    }
+
+    private getEditorGroupsInfo(): WindowLayout {
+        const layout = this.buildWindowLayout(vscode.window.tabGroups.all);
+        return layout || {
+            type: 'leaf',
+            buffers: []
+        };
+    }
+
+    private buildWindowLayout(groups: readonly vscode.TabGroup[]): WindowLayout | null {
+        if (groups.length === 0) {
+            return null;
+        }
+
+        if (groups.length === 1) {
+            // 单个组，创建叶子节点
+            const buffers: TabInfo[] = [];
+            for (const tab of groups[0].tabs) {
+                if (!(tab.input instanceof vscode.TabInputText)) {
+                    continue;
+                }
+
+                const editor = vscode.window.visibleTextEditors.find(
+                    e => e.document.uri.fsPath === (tab.input as vscode.TabInputText).uri.fsPath
+                );
+
+                if (editor && !this.shouldIgnoreFile(editor.document.uri.toString())) {
+                    const viewState = {
+                        cursor: {
+                            line: editor.selection.active.line,
+                            character: editor.selection.active.character
+                        },
+                        scroll: {
+                            topLine: editor.visibleRanges[0]?.start.line ?? 0,
+                            bottomLine: editor.visibleRanges[0]?.end.line ?? 0
+                        }
+                    };
+
+                    buffers.push({
+                        path: editor.document.uri.fsPath,
+                        active: editor === vscode.window.activeTextEditor,
+                        viewState
                     });
-                    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-                } catch (error) {
-                    this.log(`Failed to close editor: ${error}`);
+                }
+            }
+
+            return {
+                type: 'leaf',
+                buffers
+            };
+        }
+
+        // 多个组，创建分割节点
+        const children: WindowLayout[] = [];
+        let totalSize = 0;
+
+        for (const group of groups) {
+            const child = this.buildWindowLayout([group]);
+            if (child) {
+                // 计算分割比例
+                const size = group.viewColumn ? group.viewColumn / groups.length : undefined;
+                if (size) {
+                    totalSize += size;
+                    child.size = size;
+                }
+                children.push(child);
+            }
+        }
+
+        // 规范化分割比例
+        if (totalSize > 0) {
+            for (const child of children) {
+                if (child.size) {
+                    child.size = child.size / totalSize;
                 }
             }
         }
+
+        return {
+            type: groups[0].viewColumn === groups[1].viewColumn ? 'hsplit' : 'vsplit',
+            children
+        };
     }
 
     private async handleBufferChange(data: { path: string }): Promise<void> {
@@ -292,55 +369,11 @@ export class SyncManager {
             return;
         }
 
-        const groups = this.getEditorGroupsInfo();
+        const layout = this.getEditorGroupsInfo();
         this.sendMessage({
             type: 'editor_group',
-            data: groups
+            data: layout
         });
-    }
-
-    private getEditorGroupsInfo(): TabInfo[][] {
-        const groups: TabInfo[][] = [];
-        const visibleEditors = vscode.window.visibleTextEditors
-            .filter(editor => !this.shouldIgnoreFile(editor.document.uri.toString()));
-
-        // Group editors by their view column
-        const editorsByColumn = new Map<number, vscode.TextEditor[]>();
-        for (const editor of visibleEditors) {
-            const column = editor.viewColumn || 1;
-            if (!editorsByColumn.has(column)) {
-                editorsByColumn.set(column, []);
-            }
-            editorsByColumn.get(column)!.push(editor);
-        }
-
-        // Convert each group to TabInfo[]
-        for (const [column, editors] of editorsByColumn) {
-            const groupTabs: TabInfo[] = [];
-            for (const editor of editors) {
-                const viewState = {
-                    cursor: {
-                        line: editor.selection.active.line,
-                        character: editor.selection.active.character
-                    },
-                    scroll: {
-                        topLine: editor.visibleRanges[0]?.start.line ?? 0,
-                        bottomLine: editor.visibleRanges[0]?.end.line ?? 0
-                    }
-                };
-
-                groupTabs.push({
-                    path: editor.document.uri.fsPath,
-                    active: editor === vscode.window.activeTextEditor,
-                    viewState
-                });
-            }
-            if (groupTabs.length > 0) {
-                groups.push(groupTabs);
-            }
-        }
-
-        return groups;
     }
 
     public syncBuffer(filePath: string): void {
