@@ -489,7 +489,10 @@ function M.init(user_config)
                     local ok, message = pcall(vim.json.decode, message_str)
                     if ok then
                         log('Received message: ' .. message_str, vim.log.levels.DEBUG)
-                        handle_message(message)
+                        -- 使用 vim.schedule 来处理消息
+                        vim.schedule(function()
+                            handle_message(message)
+                        end)
                     else
                         log('Failed to parse message: ' .. message, vim.log.levels.ERROR)
                     end
