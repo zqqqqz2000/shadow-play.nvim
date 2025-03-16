@@ -110,21 +110,6 @@ local function get_window_view_state(win)
     }
 end
 
----Get window info for a single window
----@param win number Window handle
----@return TabInfo|nil
-local function get_window_info(win)
-    local buf = vim.api.nvim_win_get_buf(win)
-    local name = vim.api.nvim_buf_get_name(buf)
-    local tab_info = {
-        path = name,
-        active = vim.api.nvim_get_current_win() == win,
-        viewState = get_window_view_state(win)
-    }
-
-    return tab_info
-end
-
 ---Default buffer distribution algorithm
 ---@param buffers string[] List of all buffer paths
 ---@param num_windows number Number of windows
@@ -734,6 +719,67 @@ function M.sync_wins()
     send_message({
         type = "editor_group",
         data = windows_info,
+        from_nvim = true
+    })
+end
+
+---Sync current buffer to VSCode
+function M.sync_buffer()
+    if not server then return end
+    -- Skip sync if handling message
+    if is_handling_message then
+        log("Skipping buffer sync while handling message", vim.log.levels.DEBUG)
+        return
+    end
+
+    local buf = vim.api.nvim_get_current_buf()
+    if should_ignore_buffer(buf) then
+        return
+    end
+
+    local path = vim.api.nvim_buf_get_name(buf)
+    if path == "" then
+        return
+    end
+
+    log(string.format("Syncing buffer: %s", path), vim.log.levels.DEBUG)
+    send_message({
+        type = "buffer_change",
+        data = {
+            path = path
+        },
+        from_nvim = true
+    })
+end
+
+---Sync current window view state to VSCode
+function M.sync_view()
+    if not server then return end
+    -- Skip sync if handling message
+    if is_handling_message then
+        log("Skipping view sync while handling message", vim.log.levels.DEBUG)
+        return
+    end
+
+    local win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_win_get_buf(win)
+    if should_ignore_buffer(buf) then
+        return
+    end
+
+    local path = vim.api.nvim_buf_get_name(buf)
+    if path == "" then
+        return
+    end
+
+    local view_state = get_window_view_state(win)
+    log(string.format("Syncing view state for buffer: %s", path), vim.log.levels.DEBUG)
+    send_message({
+        type = "view_change",
+        data = {
+            path = path,
+            viewState = view_state
+        },
         from_nvim = true
     })
 end

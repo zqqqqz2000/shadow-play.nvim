@@ -72,6 +72,34 @@ function M.setup(user_config)
         end,
     })
 
+    -- Watch for window scroll
+    vim.api.nvim_create_autocmd({
+        "CursorMoved",
+        "CursorMovedI",
+        "VimResized",   -- 窗口大小改变时可能导致滚动
+        "WinNew",       -- 新窗口创建时
+        "WinClosed",    -- 窗口关闭时
+        "WinEnter",     -- 进入窗口时
+        "TextChanged",  -- 文本改变时（用于更新滚动位置）
+        "TextChangedI", -- 插入模式下文本改变时
+    }, {
+        group = group,
+        callback = function(ev)
+            log("Window event detected: " .. ev.event)
+            local ok, err = pcall(function()
+                require("shadow-play.sync").sync_view()
+            end)
+            if not ok then
+                -- 记录详细错误信息
+                log("Error in sync_view: " .. tostring(err), "ERROR")
+                -- 同时显示错误通知
+                vim.notify("ShadowPlay sync_view error: " .. tostring(err), vim.log.levels.ERROR)
+                -- 记录调用栈
+                log("Stack trace: " .. debug.traceback(), "ERROR")
+            end
+        end,
+    })
+
     -- Initialize sync service
     require("shadow-play.sync").init(config)
 end
