@@ -50,12 +50,12 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.window.onDidChangeTextEditorSelection(e => {
             if (!syncManager.isProcessingNeovimMessage()) {
-                syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+                syncManager.syncEditorGroups();
             }
         }),
         vscode.window.onDidChangeTextEditorVisibleRanges(e => {
             if (!syncManager.isProcessingNeovimMessage()) {
-                syncManager.syncViewState(e.textEditor.document.uri.fsPath);
+                syncManager.syncEditorGroups();
             }
         })
     );

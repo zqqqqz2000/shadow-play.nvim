@@ -36,7 +36,7 @@ interface WindowLayout {
 }
 
 interface Message {
-    type: 'editor_group' | 'buffer_change' | 'view_change';
+    type: 'editor_group' | 'buffer_change';
     data: WindowLayout | { 
         path: string;
         viewState?: ViewState;
@@ -145,9 +145,6 @@ export class SyncManager {
                     break;
                 case 'buffer_change':
                     await this.handleBufferChange(message.data as { path: string });
-                    break;
-                case 'view_change':
-                    await this.handleViewChange(message.data as { path: string; viewState: ViewState });
                     break;
             }
         } finally {
@@ -432,38 +429,6 @@ export class SyncManager {
         }
     }
 
-    private async handleViewChange(data: { path: string; viewState: ViewState }): Promise<void> {
-        // Ignore special files
-        if (this.shouldIgnoreFile(data.path)) {
-            return;
-        }
-
-        const uri = vscode.Uri.file(data.path);
-        const editor = vscode.window.visibleTextEditors.find(
-            editor => editor.document.uri.fsPath === uri.fsPath
-        );
-
-        if (editor) {
-            this.log(`Updating view state for ${data.path}`);
-            
-            // Update cursor position
-            const position = new vscode.Position(
-                data.viewState.cursor.line,
-                data.viewState.cursor.character
-            );
-            editor.selection = new vscode.Selection(position, position);
-
-            // Update scroll position
-            editor.revealRange(
-                new vscode.Range(
-                    data.viewState.scroll.topLine, 0,
-                    data.viewState.scroll.bottomLine, 0
-                ),
-                vscode.TextEditorRevealType.InCenter
-            );
-        }
-    }
-
     public syncEditorGroups(): void {
         if (!this.client || this.isProcessingNeovimMessage()) {
             return;
@@ -493,40 +458,6 @@ export class SyncManager {
                 path: filePath
             }
         });
-    }
-
-    public syncViewState(filePath: string): void {
-        if (!this.client || this.isProcessingNeovimMessage()) {
-            return;
-        }
-
-        // Ignore special files
-        if (this.shouldIgnoreFile(filePath)) {
-            return;
-        }
-
-        const editor = vscode.window.visibleTextEditors.find(
-            e => e.document.uri.fsPath === filePath
-        );
-
-        if (editor) {
-            this.sendMessage({
-                type: 'view_change',
-                data: {
-                    path: filePath,
-                    viewState: {
-                        cursor: {
-                            line: editor.selection.active.line,
-                            character: editor.selection.active.character
-                        },
-                        scroll: {
-                            topLine: editor.visibleRanges[0]?.start.line ?? 0,
-                            bottomLine: editor.visibleRanges[0]?.end.line ?? 0
-                        }
-                    }
-                }
-            });
-        }
     }
 
     private sendMessage(message: Message): void {

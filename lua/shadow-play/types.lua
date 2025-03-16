@@ -19,7 +19,7 @@
 ---@field size number|nil Split ratio (number between 0-1, optional)
 
 ---@class Message
----@field type "editor_group"|"buffer_change"|"view_change" Message type
+---@field type "editor_group"|"buffer_change" Message type
 ---@field data WindowLayout|{ path: string, viewState: ViewState|nil } Message data
 ---@field from_nvim boolean Whether the message is from the nvim side plugin
 
