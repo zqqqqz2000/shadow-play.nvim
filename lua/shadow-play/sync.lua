@@ -592,9 +592,11 @@ local function handle_message(msg)
         end
     end)
 
-    -- Release lock
-    is_handling_message = false
-    log("Message handling completed, lock released", vim.log.levels.DEBUG)
+    -- Release lock after 100ms delay
+    vim.defer_fn(function()
+        is_handling_message = false
+        log("Message handling completed, lock released", vim.log.levels.DEBUG)
+    end, 100)
 
     -- If error occurred during processing, log it
     if not ok then
