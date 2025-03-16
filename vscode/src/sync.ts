@@ -153,7 +153,7 @@ export class SyncManager {
         } finally {
             setTimeout(() => {
                 this.isHandlingNeovimMessage = false;
-            }, 100);
+            }, 1000);
         }
     }
 
@@ -205,9 +205,6 @@ export class SyncManager {
             const allBuffers = collectBuffers(layout);
             
             // 为每个 VSCode editor group 应用对应的 buffers
-            let activeEditor: { groupIndex: number, buffer: TabInfo } | null = null;
-
-            // 第一遍：打开所有非激活的标签页
             for (let i = 0; i < vscodeGroups.length; i++) {
                 const buffers = allBuffers[i];
                 if (!buffers) continue;
@@ -218,31 +215,63 @@ export class SyncManager {
                             continue;
                         }
 
-                        if (buffer.active) {
-                            activeEditor = { groupIndex: i, buffer };
-                            continue;
+                        const uri = vscode.Uri.file(buffer.path);
+                        
+                        // 检查当前 editor group 中是否已经打开了这个文件
+                        const editor = vscode.window.visibleTextEditors.find(
+                            e => e.document.uri.fsPath === uri.fsPath && 
+                                 e.viewColumn === vscodeGroups[i].viewColumn
+                        );
+
+                        if (editor) {
+                            // 如果文件已经打开且是激活状态或有视图状态，需要处理
+                            if (buffer.active || buffer.viewState) {
+                                // 如果有视图状态，同步它
+                                if (buffer.viewState) {
+                                    const position = new vscode.Position(
+                                        buffer.viewState.cursor.line,
+                                        buffer.viewState.cursor.character
+                                    );
+                                    editor.selection = new vscode.Selection(position, position);
+                                    editor.revealRange(
+                                        new vscode.Range(
+                                            buffer.viewState.scroll.topLine, 0,
+                                            buffer.viewState.scroll.bottomLine, 0
+                                        ),
+                                        vscode.TextEditorRevealType.InCenter
+                                    );
+                                }
+                                // 如果需要激活，激活它
+                                if (buffer.active) {
+                                    await vscode.window.showTextDocument(editor.document, {
+                                        viewColumn: vscodeGroups[i].viewColumn,
+                                        preserveFocus: false,
+                                        preview: false
+                                    });
+                                }
+                            }
+                            continue;  // 文件已经打开，跳过后续处理
                         }
 
-                        const uri = vscode.Uri.file(buffer.path);
+                        // 文件未打开，需要打开它
                         const doc = await vscode.workspace.openTextDocument(uri);
-                        await vscode.window.showTextDocument(doc, {
-                            viewColumn: vscodeGroups[i].viewColumn,
-                            preview: false,
-                            preserveFocus: true // 所有非激活的标签页都设置 preserveFocus: true
-                        });
+                        
+                        // 如果是激活的 buffer 或有视图状态，需要显示它
+                        if (buffer.active) {
+                            const newEditor = await vscode.window.showTextDocument(doc, {
+                                viewColumn: vscodeGroups[i].viewColumn,
+                                preview: false,
+                                preserveFocus: true  // 只有激活的 buffer 才获取焦点
+                            });
 
-                        if (buffer.viewState) {
-                            const editor = vscode.window.visibleTextEditors.find(
-                                e => e.document.uri.fsPath === uri.fsPath && 
-                                     e.viewColumn === vscodeGroups[i].viewColumn
-                            );
-                            if (editor) {
+                            // 如果有视图状态，同步它
+                            if (buffer.viewState) {
                                 const position = new vscode.Position(
                                     buffer.viewState.cursor.line,
                                     buffer.viewState.cursor.character
                                 );
-                                editor.selection = new vscode.Selection(position, position);
-                                editor.revealRange(
+                                newEditor.selection = new vscode.Selection(position, position);
+                                newEditor.revealRange(
                                     new vscode.Range(
                                         buffer.viewState.scroll.topLine, 0,
                                         buffer.viewState.scroll.bottomLine, 0
@@ -250,46 +279,17 @@ export class SyncManager {
                                     vscode.TextEditorRevealType.InCenter
                                 );
                             }
+                        } else {
+                            // 只需要打开文件，不需要显示或激活
+                            await vscode.workspace.openTextDocument(uri);
                         }
                     } catch (error) {
                         this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
                     }
                 }
             }
-
-            // 第二遍：最后打开激活的标签页
-            if (activeEditor) {
-                try {
-                    const uri = vscode.Uri.file(activeEditor.buffer.path);
-                    const doc = await vscode.workspace.openTextDocument(uri);
-                    await vscode.window.showTextDocument(doc, {
-                        viewColumn: vscodeGroups[activeEditor.groupIndex].viewColumn,
-                        preview: false,
-                        preserveFocus: false // 激活的标签页设置 preserveFocus: false
-                    });
-
-                    if (activeEditor.buffer.viewState) {
-                        const editor = vscode.window.activeTextEditor;
-                        if (editor && editor.document.uri.fsPath === uri.fsPath) {
-                            const position = new vscode.Position(
-                                activeEditor.buffer.viewState.cursor.line,
-                                activeEditor.buffer.viewState.cursor.character
-                            );
-                            editor.selection = new vscode.Selection(position, position);
-                            editor.revealRange(
-                                new vscode.Range(
-                                    activeEditor.buffer.viewState.scroll.topLine, 0,
-                                    activeEditor.buffer.viewState.scroll.bottomLine, 0
-                                ),
-                                vscode.TextEditorRevealType.InCenter
-                            );
-                        }
-                    }
-                } catch (error) {
-                    this.log(`Failed to handle active buffer ${activeEditor.buffer.path}: ${error}`);
-                }
-            }
         } else {
+            this.log(`Editor group count mismatch: ${vimGroupCount} !== ${vscodeGroups.length}`);
             // 如果 editor group 数量不一致，按照原来的逻辑重建布局
             if (layout.type === 'leaf') {
                 // Handle leaf node
@@ -300,12 +300,7 @@ export class SyncManager {
                         }
 
                         const uri = vscode.Uri.file(buffer.path);
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        await vscode.window.showTextDocument(doc, {
-                            viewColumn,
-                            preview: false,
-                            preserveFocus: !buffer.active
-                        });
+                        await vscode.workspace.openTextDocument(uri);
 
                         if (buffer.viewState) {
                             const editor = vscode.window.activeTextEditor;
@@ -372,17 +367,28 @@ export class SyncManager {
                 let viewState: ViewState | undefined;
 
                 if (editor) {
-                    // 如果编辑器可见，使用当前状态
-                    viewState = {
-                        cursor: {
-                            line: editor.selection.active.line,
-                            character: editor.selection.active.character
-                        },
-                        scroll: {
-                            topLine: editor.visibleRanges[0]?.start.line ?? 0,
-                            bottomLine: editor.visibleRanges[0]?.end.line ?? 0
-                        }
-                    };
+                    // 确保编辑器已经完全初始化
+                    if (editor.visibleRanges && editor.visibleRanges.length > 0) {
+                        const firstVisibleRange = editor.visibleRanges[0];
+                        const lastVisibleRange = editor.visibleRanges[editor.visibleRanges.length - 1];
+                        
+                        viewState = {
+                            cursor: {
+                                line: editor.selection.active.line,
+                                character: editor.selection.active.character
+                            },
+                            scroll: {
+                                topLine: firstVisibleRange.start.line,
+                                bottomLine: lastVisibleRange.end.line
+                            }
+                        };
+                        
+                        this.log(`Got view state for ${uri.fsPath}: cursor(${viewState.cursor.line},${viewState.cursor.character}), scroll(${viewState.scroll.topLine},${viewState.scroll.bottomLine})`);
+                    } else {
+                        this.log(`No visible ranges for editor ${uri.fsPath}`);
+                    }
+                } else {
+                    this.log(`Editor not found in visibleTextEditors for ${uri.fsPath}`);
                 }
 
                 buffers.push({

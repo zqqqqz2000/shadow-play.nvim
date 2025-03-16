@@ -244,10 +244,16 @@ local function get_windows_info()
     for i, win in ipairs(active_windows) do
         local window_buffers = {}
         for _, buf_path in ipairs(distributed_buffers[i] or {}) do
+            ---@type ViewState|nil
+            local viewState = nil
+            local active = vim.api.nvim_win_get_buf(win) == vim.fn.bufnr(buf_path)
+            if active then
+                viewState = get_window_view_state(win)
+            end
             local info = {
                 path = buf_path,
-                active = vim.api.nvim_win_get_buf(win) == vim.fn.bufnr(buf_path),
-                viewState = get_window_view_state(win)
+                active = active,
+                viewState = viewState
             }
             table.insert(window_buffers, info)
         end

@@ -87,7 +87,7 @@ function M.setup(user_config)
         callback = function(ev)
             log("Window event detected: " .. ev.event)
             local ok, err = pcall(function()
-                require("shadow-play.sync").sync_view()
+                require("shadow-play.sync").sync_wins()
             end)
             if not ok then
                 -- 记录详细错误信息
