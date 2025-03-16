@@ -150,7 +150,7 @@ export class SyncManager {
         } finally {
             setTimeout(() => {
                 this.isHandlingNeovimMessage = false;
-            }, 1000);
+            }, 100);
         }
     }
 
@@ -363,7 +363,7 @@ export class SyncManager {
 
                 let viewState: ViewState | undefined;
 
-                if (editor) {
+                if (editor && tab.isActive) {  // 只有当编辑器可见且是激活状态时才获取视图状态
                     // 确保编辑器已经完全初始化
                     if (editor.visibleRanges && editor.visibleRanges.length > 0) {
                         const firstVisibleRange = editor.visibleRanges[0];
@@ -380,12 +380,8 @@ export class SyncManager {
                             }
                         };
                         
-                        this.log(`Got view state for ${uri.fsPath}: cursor(${viewState.cursor.line},${viewState.cursor.character}), scroll(${viewState.scroll.topLine},${viewState.scroll.bottomLine})`);
-                    } else {
-                        this.log(`No visible ranges for editor ${uri.fsPath}`);
+                        this.log(`Got view state for active editor ${uri.fsPath}: cursor(${viewState.cursor.line},${viewState.cursor.character}), scroll(${viewState.scroll.topLine},${viewState.scroll.bottomLine})`);
                     }
-                } else {
-                    this.log(`Editor not found in visibleTextEditors for ${uri.fsPath}`);
                 }
 
                 buffers.push({
