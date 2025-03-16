@@ -287,48 +287,72 @@ export class SyncManager {
             }
         } else {
             this.log(`Editor group count mismatch: ${vimGroupCount} !== ${vscodeGroups.length}`);
-            // 如果 editor group 数量不一致，按照原来的逻辑重建布局
-            if (layout.type === 'leaf') {
-                // Handle leaf node
-                for (const buffer of layout.buffers || []) {
-                    try {
-                        if (this.shouldIgnoreFile(buffer.path)) {
-                            continue;
-                        }
+            // 关闭所有编辑器和编辑器组
+            await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+            // 重建布局
+            await this.createNewLayout(layout);
+        }
+    }
 
-                        const uri = vscode.Uri.file(buffer.path);
-                        await vscode.workspace.openTextDocument(uri);
+    /**
+     * 创建新的窗口布局
+     * @param layout 目标布局配置
+     * @param viewColumn 当前视图列
+     */
+    private async createNewLayout(layout: WindowLayout, viewColumn: vscode.ViewColumn = vscode.ViewColumn.One): Promise<void> {
+        if (layout.type === 'leaf') {
+            // Handle leaf node
+            for (const buffer of layout.buffers || []) {
+                try {
+                    if (this.shouldIgnoreFile(buffer.path)) {
+                        continue;
+                    }
+
+                    const uri = vscode.Uri.file(buffer.path);
+                    await vscode.workspace.openTextDocument(uri);
+
+                    if (buffer.active) {
+                        const doc = await vscode.window.showTextDocument(uri, {
+                            viewColumn,
+                            preserveFocus: !buffer.active
+                        });
 
                         if (buffer.viewState) {
-                            const editor = vscode.window.activeTextEditor;
-                            if (editor && editor.document.uri.fsPath === uri.fsPath) {
-                                const position = new vscode.Position(
-                                    buffer.viewState.cursor.line,
-                                    buffer.viewState.cursor.character
-                                );
-                                editor.selection = new vscode.Selection(position, position);
-                                editor.revealRange(
-                                    new vscode.Range(
-                                        buffer.viewState.scroll.topLine, 0,
-                                        buffer.viewState.scroll.bottomLine, 0
-                                    ),
-                                    vscode.TextEditorRevealType.InCenter
-                                );
-                            }
+                            const position = new vscode.Position(
+                                buffer.viewState.cursor.line,
+                                buffer.viewState.cursor.character
+                            );
+                            doc.selection = new vscode.Selection(position, position);
+                            doc.revealRange(
+                                new vscode.Range(
+                                    buffer.viewState.scroll.topLine, 0,
+                                    buffer.viewState.scroll.bottomLine, 0
+                                ),
+                                vscode.TextEditorRevealType.InCenter
+                            );
                         }
-                    } catch (error) {
-                        this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
                     }
+                } catch (error) {
+                    this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
                 }
-            } else {
-                // Handle split node
-                for (let i = 0; i < (layout.children || []).length; i++) {
-                    const child = layout.children![i];
-                    const nextColumn = layout.type === 'vsplit' 
-                        ? viewColumn + i 
-                        : viewColumn;
-                    await this.applyWindowLayout(child, nextColumn);
+            }
+        } else {
+            // Handle split node
+            for (let i = 0; i < (layout.children || []).length; i++) {
+                const child = layout.children![i];
+                
+                // 如果不是第一个子节点，需要先创建新的 editor group
+                if (i > 0) {
+                    const splitCommand = layout.type === 'vsplit' 
+                        ? 'workbench.action.splitEditorRight'
+                        : 'workbench.action.splitEditorDown';
+                    await vscode.commands.executeCommand(splitCommand);
                 }
+                
+                const nextColumn = layout.type === 'vsplit' 
+                    ? viewColumn + i 
+                    : viewColumn;
+                await this.createNewLayout(child, nextColumn);
             }
         }
     }
@@ -431,10 +455,12 @@ export class SyncManager {
         }
 
         this.getEditorGroupsInfo().then(layout => {
-            this.sendMessage({
-                type: 'editor_group',
-                data: layout
-            });
+            if (!(layout.type === 'auto' && (layout.children || []).length === 0)) {
+                this.sendMessage({
+                    type: 'editor_group',
+                    data: layout
+                });
+            }
         });
     }
 

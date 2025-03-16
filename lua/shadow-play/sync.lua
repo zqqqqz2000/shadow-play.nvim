@@ -61,8 +61,6 @@ local function log(msg, level, win)
         msg
     )
 
-    vim.notify(log_msg, level)
-
     if not config.log_file then return end
     local file = io.open(config.log_file, "a")
     if not file then return end
@@ -80,6 +78,7 @@ local function should_ignore_buffer(buf)
     local buftype = vim.bo[buf].buftype
     local is_loaded = vim.api.nvim_buf_is_loaded(buf)
     local is_listed = vim.fn.buflisted(buf) == 1
+    log(string.format("Checking buffer %d: name=%s, buftype=%s, is_loaded=%s, is_listed=%s", buf, name, buftype, is_loaded, is_listed), vim.log.levels.DEBUG)
 
     return name == "" or
         not is_loaded or
@@ -193,45 +192,57 @@ local function get_windows_info()
     log("Getting current windows information...", vim.log.levels.DEBUG)
     local current_tab = vim.api.nvim_get_current_tabpage()
     local wins = vim.api.nvim_tabpage_list_wins(current_tab)
+    log(string.format("Found %d total windows in current tab", #wins), vim.log.levels.DEBUG)
+
     local active_windows = {}
     local all_buffers = {}
-    local buffer_order = {}
 
     -- Collect all valid windows
     for _, win in ipairs(wins) do
         local buf = vim.api.nvim_win_get_buf(win)
+        local buf_name = vim.api.nvim_buf_get_name(buf)
         if not should_ignore_buffer(buf) then
             table.insert(active_windows, win)
+            log(string.format("Added valid window %d with buffer '%s'", win, buf_name), vim.log.levels.DEBUG)
+        else
+            log(string.format("Ignoring window %d with buffer '%s'", win, buf_name), vim.log.levels.DEBUG)
         end
     end
+    log(string.format("Found %d valid windows after filtering", #active_windows), vim.log.levels.DEBUG)
 
     -- Collect all open buffers
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(buf)
         if not should_ignore_buffer(buf) then
-            local name = vim.api.nvim_buf_get_name(buf)
             if name ~= "" then
                 table.insert(all_buffers, name)
-                buffer_order[name] = #buffer_order + 1
+                log(string.format("Added valid buffer '%s'", name), vim.log.levels.DEBUG)
             end
+        else
+            log(string.format("Ignoring buffer '%s'", name), vim.log.levels.DEBUG)
         end
     end
-
-    -- Use buffer distribution algorithm
-    local distribution_func = buffer_distribution_algorithm or default_buffer_distribution
-    local distributed_buffers = distribution_func(all_buffers, #active_windows)
+    log(string.format("Found %d valid buffers after filtering", #all_buffers), vim.log.levels.DEBUG)
 
     -- If there's only one window, return a leaf node
     if #active_windows == 1 then
         local win = active_windows[1]
         local window_buffers = {}
-        for _, buf_path in ipairs(distributed_buffers[1] or {}) do
+        local current_buf = vim.api.nvim_win_get_buf(win)
+        local current_buf_name = vim.api.nvim_buf_get_name(current_buf)
+        
+        -- Add all buffers to the window
+        for _, buf_path in ipairs(all_buffers) do
             local info = {
                 path = buf_path,
-                active = vim.api.nvim_win_get_buf(win) == vim.fn.bufnr(buf_path),
-                viewState = get_window_view_state(win)
+                active = buf_path == current_buf_name,
+                viewState = buf_path == current_buf_name and get_window_view_state(win) or nil
             }
+            log(string.format("Single window mode: buffer '%s' active=%s", buf_path, info.active), vim.log.levels.DEBUG)
             table.insert(window_buffers, info)
         end
+        
+        log("Returning single window leaf node", vim.log.levels.DEBUG)
         return {
             type = "leaf",
             buffers = window_buffers
@@ -240,24 +251,33 @@ local function get_windows_info()
 
     -- For multiple windows, determine split type based on first window
     local split_type = get_window_split_type(active_windows[1])
+    log(string.format("Multiple windows detected, split type: %s", split_type), vim.log.levels.DEBUG)
+    
     local children = {}
     for i, win in ipairs(active_windows) do
         local window_buffers = {}
-        for _, buf_path in ipairs(distributed_buffers[i] or {}) do
-            ---@type ViewState|nil
-            local viewState = nil
-            local active = vim.api.nvim_win_get_buf(win) == vim.fn.bufnr(buf_path)
-            if active then
-                viewState = get_window_view_state(win)
-            end
+        local current_buf = vim.api.nvim_win_get_buf(win)
+        local current_buf_name = vim.api.nvim_buf_get_name(current_buf)
+        
+        log(string.format("Processing window %d/%d", i, #active_windows), vim.log.levels.DEBUG)
+        
+        -- Add all buffers to each window
+        for _, buf_path in ipairs(all_buffers) do
             local info = {
                 path = buf_path,
-                active = active,
-                viewState = viewState
+                active = buf_path == current_buf_name,
+                viewState = buf_path == current_buf_name and get_window_view_state(win) or nil
             }
+            if info.active then
+                log(string.format("Window %d: Active buffer '%s' with view state", win, buf_path), vim.log.levels.DEBUG)
+            else
+                log(string.format("Window %d: Inactive buffer '%s'", win, buf_path), vim.log.levels.DEBUG)
+            end
             table.insert(window_buffers, info)
         end
+        
         if #window_buffers > 0 then
+            log(string.format("Adding window %d with %d buffers", win, #window_buffers), vim.log.levels.DEBUG)
             table.insert(children, {
                 type = "leaf",
                 buffers = window_buffers,
@@ -266,7 +286,7 @@ local function get_windows_info()
         end
     end
 
-    log(string.format("Found %d windows with %d total buffers", #children, #all_buffers), vim.log.levels.DEBUG)
+    log(string.format("Final layout: type=%s with %d children", split_type, #children), vim.log.levels.DEBUG)
     return {
         type = split_type,
         children = children
