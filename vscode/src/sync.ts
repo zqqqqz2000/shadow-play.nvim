@@ -29,7 +29,7 @@ interface TabInfo {
 }
 
 interface WindowLayout {
-    type: 'leaf' | 'vsplit' | 'hsplit';
+    type: 'leaf' | 'vsplit' | 'hsplit' | 'auto';
     buffers?: TabInfo[];
     children?: WindowLayout[];
     size?: number;
@@ -181,83 +181,199 @@ export class SyncManager {
     }
 
     private async applyWindowLayout(layout: WindowLayout, viewColumn: vscode.ViewColumn = vscode.ViewColumn.One): Promise<void> {
-        if (layout.type === 'leaf') {
-            // Handle leaf node
-            for (const buffer of layout.buffers || []) {
-                try {
-                    if (this.shouldIgnoreFile(buffer.path)) {
-                        continue;
-                    }
+        // 计算传入布局中的 editor group 总数
+        const countEditorGroups = (layout: WindowLayout): number => {
+            if (layout.type === 'leaf') {
+                return 1;
+            }
+            return (layout.children || []).reduce((sum, child) => sum + countEditorGroups(child), 0);
+        };
 
-                    const uri = vscode.Uri.file(buffer.path);
+        const vimGroupCount = countEditorGroups(layout);
+        const vscodeGroups = vscode.window.tabGroups.all;
+
+        // 如果 editor group 数量一致，使用现有的 VSCode editor groups
+        if (vimGroupCount === vscodeGroups.length) {
+            // 收集所有叶子节点的 buffers
+            const collectBuffers = (layout: WindowLayout): TabInfo[][] => {
+                if (layout.type === 'leaf') {
+                    return [layout.buffers || []];
+                }
+                return (layout.children || []).flatMap(child => collectBuffers(child));
+            };
+
+            const allBuffers = collectBuffers(layout);
+            
+            // 为每个 VSCode editor group 应用对应的 buffers
+            let activeEditor: { groupIndex: number, buffer: TabInfo } | null = null;
+
+            // 第一遍：打开所有非激活的标签页
+            for (let i = 0; i < vscodeGroups.length; i++) {
+                const buffers = allBuffers[i];
+                if (!buffers) continue;
+
+                for (const buffer of buffers) {
+                    try {
+                        if (this.shouldIgnoreFile(buffer.path)) {
+                            continue;
+                        }
+
+                        if (buffer.active) {
+                            activeEditor = { groupIndex: i, buffer };
+                            continue;
+                        }
+
+                        const uri = vscode.Uri.file(buffer.path);
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        await vscode.window.showTextDocument(doc, {
+                            viewColumn: vscodeGroups[i].viewColumn,
+                            preview: false,
+                            preserveFocus: true // 所有非激活的标签页都设置 preserveFocus: true
+                        });
+
+                        if (buffer.viewState) {
+                            const editor = vscode.window.visibleTextEditors.find(
+                                e => e.document.uri.fsPath === uri.fsPath && 
+                                     e.viewColumn === vscodeGroups[i].viewColumn
+                            );
+                            if (editor) {
+                                const position = new vscode.Position(
+                                    buffer.viewState.cursor.line,
+                                    buffer.viewState.cursor.character
+                                );
+                                editor.selection = new vscode.Selection(position, position);
+                                editor.revealRange(
+                                    new vscode.Range(
+                                        buffer.viewState.scroll.topLine, 0,
+                                        buffer.viewState.scroll.bottomLine, 0
+                                    ),
+                                    vscode.TextEditorRevealType.InCenter
+                                );
+                            }
+                        }
+                    } catch (error) {
+                        this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
+                    }
+                }
+            }
+
+            // 第二遍：最后打开激活的标签页
+            if (activeEditor) {
+                try {
+                    const uri = vscode.Uri.file(activeEditor.buffer.path);
                     const doc = await vscode.workspace.openTextDocument(uri);
                     await vscode.window.showTextDocument(doc, {
-                        viewColumn,
+                        viewColumn: vscodeGroups[activeEditor.groupIndex].viewColumn,
                         preview: false,
-                        preserveFocus: !buffer.active
+                        preserveFocus: false // 激活的标签页设置 preserveFocus: false
                     });
 
-                    if (buffer.viewState) {
+                    if (activeEditor.buffer.viewState) {
                         const editor = vscode.window.activeTextEditor;
                         if (editor && editor.document.uri.fsPath === uri.fsPath) {
                             const position = new vscode.Position(
-                                buffer.viewState.cursor.line,
-                                buffer.viewState.cursor.character
+                                activeEditor.buffer.viewState.cursor.line,
+                                activeEditor.buffer.viewState.cursor.character
                             );
                             editor.selection = new vscode.Selection(position, position);
                             editor.revealRange(
                                 new vscode.Range(
-                                    buffer.viewState.scroll.topLine, 0,
-                                    buffer.viewState.scroll.bottomLine, 0
+                                    activeEditor.buffer.viewState.scroll.topLine, 0,
+                                    activeEditor.buffer.viewState.scroll.bottomLine, 0
                                 ),
                                 vscode.TextEditorRevealType.InCenter
                             );
                         }
                     }
                 } catch (error) {
-                    this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
+                    this.log(`Failed to handle active buffer ${activeEditor.buffer.path}: ${error}`);
                 }
             }
         } else {
-            // Handle split node
-            for (let i = 0; i < (layout.children || []).length; i++) {
-                const child = layout.children![i];
-                const nextColumn = layout.type === 'vsplit' 
-                    ? viewColumn + i 
-                    : viewColumn;
-                await this.applyWindowLayout(child, nextColumn);
+            // 如果 editor group 数量不一致，按照原来的逻辑重建布局
+            if (layout.type === 'leaf') {
+                // Handle leaf node
+                for (const buffer of layout.buffers || []) {
+                    try {
+                        if (this.shouldIgnoreFile(buffer.path)) {
+                            continue;
+                        }
+
+                        const uri = vscode.Uri.file(buffer.path);
+                        const doc = await vscode.workspace.openTextDocument(uri);
+                        await vscode.window.showTextDocument(doc, {
+                            viewColumn,
+                            preview: false,
+                            preserveFocus: !buffer.active
+                        });
+
+                        if (buffer.viewState) {
+                            const editor = vscode.window.activeTextEditor;
+                            if (editor && editor.document.uri.fsPath === uri.fsPath) {
+                                const position = new vscode.Position(
+                                    buffer.viewState.cursor.line,
+                                    buffer.viewState.cursor.character
+                                );
+                                editor.selection = new vscode.Selection(position, position);
+                                editor.revealRange(
+                                    new vscode.Range(
+                                        buffer.viewState.scroll.topLine, 0,
+                                        buffer.viewState.scroll.bottomLine, 0
+                                    ),
+                                    vscode.TextEditorRevealType.InCenter
+                                );
+                            }
+                        }
+                    } catch (error) {
+                        this.log(`Failed to handle buffer ${buffer.path}: ${error}`);
+                    }
+                }
+            } else {
+                // Handle split node
+                for (let i = 0; i < (layout.children || []).length; i++) {
+                    const child = layout.children![i];
+                    const nextColumn = layout.type === 'vsplit' 
+                        ? viewColumn + i 
+                        : viewColumn;
+                    await this.applyWindowLayout(child, nextColumn);
+                }
             }
         }
     }
 
-    private getEditorGroupsInfo(): WindowLayout {
-        const layout = this.buildWindowLayout(vscode.window.tabGroups.all);
-        return layout || {
-            type: 'leaf',
-            buffers: []
-        };
-    }
-
-    private buildWindowLayout(groups: readonly vscode.TabGroup[]): WindowLayout | null {
+    private async getEditorGroupsInfo(): Promise<WindowLayout> {
+        const groups = vscode.window.tabGroups.all;
         if (groups.length === 0) {
-            return null;
+            return {
+                type: 'auto',
+                children: []
+            };
         }
 
-        if (groups.length === 1) {
-            // Create a leaf node for a single group
+        const children: WindowLayout[] = [];
+        for (const group of groups) {
             const buffers: TabInfo[] = [];
-            for (const tab of groups[0].tabs) {
+            for (const tab of group.tabs) {
                 if (!(tab.input instanceof vscode.TabInputText)) {
                     continue;
                 }
 
-                const editor = vscode.window.visibleTextEditors.find(
-                    e => e.document.uri.fsPath === (tab.input as vscode.TabInputText).uri.fsPath
-                    && e.viewColumn === groups[0].viewColumn  // Ensure editor is in the same group
+                const uri = (tab.input as vscode.TabInputText).uri;
+                if (this.shouldIgnoreFile(uri.toString())) {
+                    continue;
+                }
+
+                // 首先尝试从 visibleTextEditors 获取编辑器
+                let editor = vscode.window.visibleTextEditors.find(
+                    e => e.document.uri.fsPath === uri.fsPath
+                    && e.viewColumn === group.viewColumn
                 );
 
-                if (editor && !this.shouldIgnoreFile(editor.document.uri.toString())) {
-                    const viewState = {
+                let viewState: ViewState | undefined;
+
+                if (editor) {
+                    // 如果编辑器可见，使用当前状态
+                    viewState = {
                         cursor: {
                             line: editor.selection.active.line,
                             character: editor.selection.active.character
@@ -267,34 +383,26 @@ export class SyncManager {
                             bottomLine: editor.visibleRanges[0]?.end.line ?? 0
                         }
                     };
-
-                    buffers.push({
-                        path: editor.document.uri.fsPath,
-                        active: tab.isActive,  // Use tab's active state
-                        viewState
-                    });
                 }
+
+                buffers.push({
+                    path: uri.fsPath,
+                    active: tab.isActive,
+                    viewState
+                });
             }
 
-            return {
-                type: 'leaf',
-                buffers
-            };
-        }
-
-        // TODO: Future improvement - support nested layouts, currently only handles vertical splits
-        const children: WindowLayout[] = [];
-        for (const group of groups) {
-            const child = this.buildWindowLayout([group]);
-            if (child) {
-                // Distribute space equally among groups
-                child.size = 1 / groups.length;
-                children.push(child);
+            if (buffers.length > 0) {
+                children.push({
+                    type: 'leaf',
+                    buffers,
+                    size: 1 / groups.length
+                });
             }
         }
 
         return {
-            type: 'vsplit',
+            type: 'auto',
             children
         };
     }
@@ -355,10 +463,11 @@ export class SyncManager {
             return;
         }
 
-        const layout = this.getEditorGroupsInfo();
-        this.sendMessage({
-            type: 'editor_group',
-            data: layout
+        this.getEditorGroupsInfo().then(layout => {
+            this.sendMessage({
+                type: 'editor_group',
+                data: layout
+            });
         });
     }
 

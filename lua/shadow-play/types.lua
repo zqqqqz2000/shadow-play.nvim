@@ -13,7 +13,7 @@
 ---@field viewState ViewState|nil View state information
 
 ---@class WindowLayout
----@field type "leaf"|"vsplit"|"hsplit" Layout type: leaf node (single window) or split type
+---@field type "leaf"|"vsplit"|"hsplit"|"auto" Layout type: leaf node (single window) or split type
 ---@field buffers TabInfo[] Buffers in the current window (only valid when type is leaf)
 ---@field children WindowLayout[] Child window layouts (only valid when type is vsplit or hsplit)
 ---@field size number|nil Split ratio (number between 0-1, optional)

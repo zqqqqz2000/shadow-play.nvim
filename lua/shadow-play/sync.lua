@@ -356,6 +356,13 @@ local function handle_view_change(data)
     end
 end
 
+---Report sync error
+---@param msg string Error message
+local function report_sync_error(msg)
+    log(msg, vim.log.levels.ERROR)
+    vim.notify("Shadow Play: " .. msg, vim.log.levels.ERROR)
+end
+
 ---Recursively synchronize window layout
 ---@param layout WindowLayout Target layout configuration
 ---@param win? number Current window ID
@@ -380,6 +387,61 @@ local function sync_window_layout(layout, win)
             vim.cmd('new')
             win = vim.api.nvim_get_current_win()
             return sync_window_layout(layout, win)
+        end
+
+        -- Special handling for auto type layout
+        if layout.type == "auto" then
+            -- Compare window counts
+            local layout_window_count = #layout.children
+            if layout_window_count ~= #valid_wins then
+                -- Report error and stop sync
+                report_sync_error(string.format(
+                    "Window count mismatch: Vim has %d windows but VSCode has %d windows. Sync aborted.",
+                    #valid_wins,
+                    layout_window_count
+                ))
+                return valid_wins[1]
+            end
+
+            -- Window counts match, sync content to each window
+            for i, win in ipairs(valid_wins) do
+                local child_layout = layout.children[i]
+                if child_layout and child_layout.buffers then
+                    -- 确保所有 buffer 都已加载
+                    for _, buf_info in ipairs(child_layout.buffers) do
+                        local bufnr = vim.fn.bufnr(buf_info.path)
+                        if bufnr == -1 then
+                            bufnr = vim.fn.bufadd(buf_info.path)
+                            vim.bo[bufnr].buflisted = true
+                        end
+                    end
+
+                    -- 设置激活的 buffer
+                    local active_buffer = nil
+                    for _, buf_info in ipairs(child_layout.buffers) do
+                        if buf_info.active then
+                            active_buffer = vim.fn.bufnr(buf_info.path)
+                            -- 设置 buffer 并更新视图状态
+                            vim.api.nvim_win_set_buf(win, active_buffer)
+                            if buf_info.viewState then
+                                update_window_view(win, buf_info.viewState)
+                            end
+                            break
+                        end
+                    end
+
+                    -- 如果没有激活的 buffer，使用第一个
+                    if not active_buffer and #child_layout.buffers > 0 then
+                        local first_buf = child_layout.buffers[1]
+                        active_buffer = vim.fn.bufnr(first_buf.path)
+                        vim.api.nvim_win_set_buf(win, active_buffer)
+                        if first_buf.viewState then
+                            update_window_view(win, first_buf.viewState)
+                        end
+                    end
+                end
+            end
+            return valid_wins[1]
         end
 
         -- Compare existing window layout with target layout
