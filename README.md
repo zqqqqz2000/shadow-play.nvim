@@ -71,6 +71,7 @@ The `socket_path` is a crucial configuration for communication between Neovim an
 - VSCode/Cursor: Must be configured with the same path
 
 Important notes:
+
 1. The `socket_path` must be configured with the same path on both sides
 2. Both editors must have read and write permissions to this path
 3. If you modify the default path, ensure the new directory exists and has correct permissions
@@ -97,4 +98,5 @@ MIT
 
 ## 🙏 Acknowledgments
 
-Thanks to all contributors! 
+Thanks to all contributors!
+

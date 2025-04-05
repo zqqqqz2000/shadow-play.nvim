@@ -44,4 +44,5 @@
 
 ---@class ViewState
 ---@field cursor Position
----@field scroll { topLine: number, bottomLine: number } 
+---@field scroll { topLine: number, bottomLine: number }
+

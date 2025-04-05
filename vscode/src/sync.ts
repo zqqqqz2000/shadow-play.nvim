@@ -29,7 +29,7 @@ interface TabInfo {
 }
 
 interface WindowLayout {
-    type: 'leaf' | 'vsplit' | 'hsplit' | 'auto';
+    type: 'leaf' | 'vsplit' | 'hsplit';
     buffers?: TabInfo[];
     children?: WindowLayout[];
     size?: number;
@@ -287,10 +287,140 @@ export class SyncManager {
             }
         } else {
             this.log(`Editor group count mismatch: ${vimGroupCount} !== ${vscodeGroups.length}`);
-            // 关闭所有编辑器和编辑器组
-            await vscode.commands.executeCommand('workbench.action.closeAllEditors');
-            // 重建布局
-            await this.createNewLayout(layout);
+            
+            try {
+                // 获取当前编辑器布局
+                const editorLayout = await vscode.commands.executeCommand('vscode.getEditorLayout');
+                this.log(`Current editor layout: ${JSON.stringify(editorLayout)}`);
+                
+                // 关闭所有编辑器和编辑器组
+                await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+                
+                // 使用 vscode.setEditorLayout 设置编辑器布局
+                // 根据传入的 layout 构建 VSCode 的编辑器布局
+                const vsCodeLayout = this.convertToVSCodeLayout(layout);
+                await vscode.commands.executeCommand('vscode.setEditorLayout', vsCodeLayout);
+                
+                // 重建布局中的文件
+                await this.restoreBuffersInLayout(layout);
+            } catch (error) {
+                this.log(`Failed to restore layout with setEditorLayout: ${error}`);
+                // 如果使用新API失败，退回到原来的布局恢复方式
+                await this.createNewLayout(layout);
+            }
+        }
+    }
+
+    /**
+     * 将我们的布局结构转换为VSCode的编辑器布局格式
+     */
+    private convertToVSCodeLayout(layout: WindowLayout): any {
+        const convertLayout = (node: WindowLayout): any => {
+            if (node.type === 'leaf') {
+                return {
+                    groups: [{}]  // 空对象表示一个编辑器组
+                };
+            } else if (node.type === 'vsplit' || node.type === 'hsplit') {
+                const orientation = node.type === 'vsplit' ? 0 : 1;  // 0表示水平排列（垂直分割），1表示垂直排列（水平分割）
+                const groups = (node.children || []).map(child => {
+                    const result = convertLayout(child);
+                    return result.groups ? result.groups[0] : {};
+                });
+                
+                // 设置每个子组的尺寸
+                for (let i = 0; i < groups.length; i++) {
+                    if (node.children?.[i].size) {
+                        groups[i].size = node.children[i].size;
+                    }
+                }
+                
+                return {
+                    orientation,
+                    groups
+                };
+            } else {
+                // 默认返回简单布局
+                return {
+                    groups: [{}]
+                };
+            }
+        };
+        
+        const result = convertLayout(layout);
+        this.log(`Converted layout: ${JSON.stringify(result)}`);
+        return result;
+    }
+    
+    /**
+     * 恢复布局中所有缓冲区
+     */
+    private async restoreBuffersInLayout(layout: WindowLayout): Promise<void> {
+        const collectBufferInfos = (layout: WindowLayout): {buffers: TabInfo[], viewColumn: number}[] => {
+            if (layout.type === 'leaf') {
+                return [{
+                    buffers: layout.buffers || [],
+                    viewColumn: vscode.ViewColumn.One  // 默认值，后面会更新
+                }];
+            }
+            
+            const result: {buffers: TabInfo[], viewColumn: number}[] = [];
+            let viewColumn = vscode.ViewColumn.One;
+            
+            for (const child of (layout.children || [])) {
+                const childBuffers = collectBufferInfos(child);
+                
+                // 更新视图列
+                for (let i = 0; i < childBuffers.length; i++) {
+                    childBuffers[i].viewColumn = viewColumn + i;
+                }
+                
+                result.push(...childBuffers);
+                viewColumn += childBuffers.length;
+            }
+            
+            return result;
+        };
+        
+        const bufferGroups = collectBufferInfos(layout);
+        this.log(`Collecting buffer groups: ${JSON.stringify(bufferGroups)}`);
+        
+        // 打开每个缓冲区组中的文件
+        for (const group of bufferGroups) {
+            for (const buffer of group.buffers) {
+                try {
+                    if (this.shouldIgnoreFile(buffer.path)) {
+                        continue;
+                    }
+                    
+                    const uri = vscode.Uri.file(buffer.path);
+                    const doc = await vscode.workspace.openTextDocument(uri);
+                    
+                    if (buffer.active) {
+                        const editor = await vscode.window.showTextDocument(doc, {
+                            viewColumn: group.viewColumn,
+                            preserveFocus: !buffer.active,
+                            preview: false
+                        });
+                        
+                        if (buffer.viewState) {
+                            const position = new vscode.Position(
+                                buffer.viewState.cursor.line,
+                                buffer.viewState.cursor.character
+                            );
+                            editor.selection = new vscode.Selection(position, position);
+                            editor.revealRange(
+                                new vscode.Range(
+                                    buffer.viewState.scroll.topLine, 0,
+                                    buffer.viewState.scroll.bottomLine, 0
+                                ),
+                                vscode.TextEditorRevealType.InCenter
+                            );
+                        }
+                    }
+                } catch (error) {
+                    this.log(`Failed to restore buffer ${buffer.path}: ${error}`);
+                }
+            }
         }
     }
 
@@ -361,11 +491,12 @@ export class SyncManager {
         const groups = vscode.window.tabGroups.all;
         if (groups.length === 0) {
             return {
-                type: 'auto',
+                type: 'leaf',
                 children: []
             };
         }
 
+        // 创建包含所有buffer信息的子节点
         const children: WindowLayout[] = [];
         for (const group of groups) {
             const buffers: TabInfo[] = [];
@@ -424,8 +555,29 @@ export class SyncManager {
             }
         }
 
+        // 如果只有一个子节点，直接返回
+        if (children.length <= 1) {
+            return children[0] || { type: 'leaf', buffers: [] };
+        }
+
+        // 判断分割类型 - 从VS Code的布局中推断
+        // 默认使用垂直分割，因为这是最常见的多编辑器布局
+        let splitType: 'vsplit' | 'hsplit' = 'vsplit';
+        
+        try {
+            // 尝试获取VS Code的编辑器布局
+            const editorLayout = await vscode.commands.executeCommand('vscode.getEditorLayout') as any;
+            this.log(`Editor layout: ${JSON.stringify(editorLayout)}`);
+            if (editorLayout && editorLayout.orientation !== undefined) {
+                // VS Code使用0表示水平排列（垂直分割），1表示垂直排列（水平分割）
+                splitType = editorLayout.orientation === 0 ? 'vsplit' : 'hsplit';
+            }
+        } catch (error) {
+            this.log(`Failed to get editor layout: ${error}`);
+        }
+
         return {
-            type: 'auto',
+            type: splitType,
             children
         };
     }
@@ -455,12 +607,15 @@ export class SyncManager {
         }
 
         this.getEditorGroupsInfo().then(layout => {
-            if (!(layout.type === 'auto' && (layout.children || []).length === 0)) {
-                this.sendMessage({
-                    type: 'editor_group',
-                    data: layout
-                });
+            // 只发送有效的布局信息
+            if (layout.type === 'leaf' && !layout.buffers?.length && !(layout.children?.length)) {
+                return; // 空布局不发送
             }
+            
+            this.sendMessage({
+                type: 'editor_group',
+                data: layout
+            });
         });
     }
 
