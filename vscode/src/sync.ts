@@ -293,7 +293,6 @@ export class SyncManager {
             try {
                 // 获取当前编辑器布局
                 const editorLayout = await vscode.commands.executeCommand('vscode.getEditorLayout');
-                this.log(`Current editor layout: ${JSON.stringify(editorLayout)}`);
                 
                 // 关闭所有编辑器和编辑器组
                 await vscode.commands.executeCommand('workbench.action.closeAllEditors');
