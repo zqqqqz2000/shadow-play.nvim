@@ -498,8 +498,8 @@ export class SyncManager {
             };
         }
 
-        // 创建包含所有buffer信息的子节点
-        const children: WindowLayout[] = [];
+        // 获取每个group的buffer信息
+        const groupBuffers: Map<number, TabInfo[]> = new Map();
         for (const group of groups) {
             const buffers: TabInfo[] = [];
             for (const tab of group.tabs) {
@@ -512,7 +512,7 @@ export class SyncManager {
                     continue;
                 }
 
-                // 首先尝试从 visibleTextEditors 获取编辑器
+                // 尝试从visibleTextEditors获取编辑器
                 let editor = vscode.window.visibleTextEditors.find(
                     e => e.document.uri.fsPath === uri.fsPath
                     && e.viewColumn === group.viewColumn
@@ -547,38 +547,115 @@ export class SyncManager {
             }
 
             if (buffers.length > 0) {
+                // 使用group.viewColumn作为索引
+                groupBuffers.set(group.viewColumn, buffers);
+            }
+        }
+
+        if (groupBuffers.size === 0) {
+            return {
+                type: 'leaf',
+                buffers: []
+            };
+        }
+
+        if (groupBuffers.size === 1) {
+            // 只有一个编辑器组，直接返回
+            return {
+                type: 'leaf',
+                buffers: groupBuffers.values().next().value
+            };
+        }
+
+        try {
+            // 获取VSCode的编辑器布局
+            const editorLayout = await vscode.commands.executeCommand('vscode.getEditorLayout') as any;
+            
+            if (!editorLayout) {
+                throw new Error("Failed to get editor layout");
+            }
+
+            // 创建一个跟踪索引的辅助变量
+            let groupIndex = 0;
+            
+            // 根据editorLayout递归构建WindowLayout
+            const buildLayoutFromEditorLayout = (layout: any, parentOrientation?: number): WindowLayout => {
+                // 如果是简单组（没有嵌套groups）
+                if (!layout.groups || layout.groups.length === 0 || 
+                    (layout.groups.length === 1 && (!layout.groups[0].groups || layout.groups[0].groups.length === 0))) {
+                    // 这是一个叶子节点
+                    const viewColumn = groups[groupIndex]?.viewColumn;
+                    groupIndex++;
+                    
+                    return {
+                        type: 'leaf',
+                        buffers: groupBuffers.get(viewColumn) || [],
+                        size: layout.size // 保持VSCode提供的比例值
+                    };
+                }
+
+                // 处理复杂布局
+                // VSCode使用0表示水平排列（垂直分割），1表示垂直排列（水平分割）
+                // 每一层的方向与其父层相反
+                let splitType: 'vsplit' | 'hsplit';
+                
+                // 如果parentOrientation未定义（根层次），直接使用layout.orientation
+                // 否则每一层的分割方式与父层相反
+                if (parentOrientation === undefined) {
+                    splitType = layout.orientation === 0 ? 'vsplit' : 'hsplit';
+                } else {
+                    splitType = parentOrientation === 0 ? 'hsplit' : 'vsplit';
+                }
+                
+                const children: WindowLayout[] = [];
+                
+                // 计算总尺寸，用于计算比例
+                const totalSize = layout.groups.reduce((sum: number, group: any) => sum + (group.size || 1), 0);
+                
+                for (const group of layout.groups) {
+                    // 递归处理子布局，将当前层的orientation传递给子层
+                    const child = buildLayoutFromEditorLayout(group, layout.orientation);
+                    
+                    // 计算比例值
+                    if (group.size !== undefined) {
+                        child.size = group.size / totalSize;
+                    }
+                    
+                    children.push(child);
+                }
+                
+                return {
+                    type: splitType,
+                    children,
+                    size: layout.size // 保持VSCode提供的比例值
+                };
+            };
+            
+            return buildLayoutFromEditorLayout(editorLayout);
+            
+        } catch (error) {
+            this.log(`Failed to build layout from editor layout: ${error}`);
+            
+            // 回退到简单布局
+            // 默认使用垂直分割
+            const children: WindowLayout[] = [];
+            
+            // 计算每个视图的均等比例
+            const ratio = 1 / groupBuffers.size;
+            
+            for (const [viewColumn, buffers] of groupBuffers.entries()) {
                 children.push({
                     type: 'leaf',
                     buffers,
-                    size: 1 / groups.length
+                    size: ratio // 使用均等比例
                 });
             }
+            
+            return {
+                type: 'vsplit',
+                children
+            };
         }
-
-        // 如果只有一个子节点，直接返回
-        if (children.length <= 1) {
-            return children[0] || { type: 'leaf', buffers: [] };
-        }
-
-        // 判断分割类型 - 从VS Code的布局中推断
-        // 默认使用垂直分割，因为这是最常见的多编辑器布局
-        let splitType: 'vsplit' | 'hsplit' = 'vsplit';
-        
-        try {
-            // 尝试获取VS Code的编辑器布局
-            const editorLayout = await vscode.commands.executeCommand('vscode.getEditorLayout') as any;
-            if (editorLayout && editorLayout.orientation !== undefined) {
-                // VS Code使用0表示水平排列（垂直分割），1表示垂直排列（水平分割）
-                splitType = editorLayout.orientation === 0 ? 'vsplit' : 'hsplit';
-            }
-        } catch (error) {
-            this.log(`Failed to get editor layout: ${error}`);
-        }
-
-        return {
-            type: splitType,
-            children
-        };
     }
 
     private async handleBufferChange(data: { path: string }): Promise<void> {
