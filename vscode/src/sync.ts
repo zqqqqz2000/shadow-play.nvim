@@ -51,6 +51,8 @@ export class SyncManager {
     private outputChannel: vscode.OutputChannel;
     private isHandlingNeovimMessage: boolean = false;
     private messageBuffer: string = '';  // Add message buffer
+    private lastWindowLayout: WindowLayout | null = null; // 存储上一次窗口布局
+    private lastSyncedFiles: Map<string, number> = new Map(); // 存储最近同步的文件及其时间戳
 
     constructor(config: Config) {
         this.config = this.normalizeConfig(config);
@@ -534,8 +536,6 @@ export class SyncManager {
                                 bottomLine: lastVisibleRange.end.line
                             }
                         };
-                        
-                        this.log(`Got view state for active editor ${uri.fsPath}: cursor(${viewState.cursor.line},${viewState.cursor.character}), scroll(${viewState.scroll.topLine},${viewState.scroll.bottomLine})`);
                     }
                 }
 
@@ -567,7 +567,6 @@ export class SyncManager {
         try {
             // 尝试获取VS Code的编辑器布局
             const editorLayout = await vscode.commands.executeCommand('vscode.getEditorLayout') as any;
-            this.log(`Editor layout: ${JSON.stringify(editorLayout)}`);
             if (editorLayout && editorLayout.orientation !== undefined) {
                 // VS Code使用0表示水平排列（垂直分割），1表示垂直排列（水平分割）
                 splitType = editorLayout.orientation === 0 ? 'vsplit' : 'hsplit';
@@ -601,6 +600,130 @@ export class SyncManager {
         }
     }
 
+    /**
+     * 比较两个窗口布局是否有实质性变化
+     * @param oldLayout 旧的窗口布局
+     * @param newLayout 新的窗口布局
+     * @returns 布尔值，表示是否有非忽略窗口的变动
+     */
+    private hasSignificantChanges(oldLayout: WindowLayout | null, newLayout: WindowLayout): boolean {
+        if (!oldLayout) {
+            // 第一次比较，认为有变化
+            return true;
+        }
+
+        // 比较分割类型
+        if (oldLayout.type !== newLayout.type) {
+            this.log("Split type changed");
+            return true;
+        }
+
+        // 提取所有非忽略文件的缓冲区
+        const extractNonIgnoredBuffers = (layout: WindowLayout): TabInfo[] => {
+            const result: TabInfo[] = [];
+            
+            const processNode = (node: WindowLayout) => {
+                if (node.type === 'leaf' && node.buffers) {
+                    // 过滤非忽略文件
+                    const nonIgnoredBuffers = node.buffers.filter(buffer => !this.shouldIgnoreFile(buffer.path));
+                    result.push(...nonIgnoredBuffers);
+                } else if (node.children) {
+                    // 递归处理子节点
+                    node.children.forEach(processNode);
+                }
+            };
+            
+            processNode(layout);
+            return result;
+        };
+
+        const oldBuffers = extractNonIgnoredBuffers(oldLayout);
+        const newBuffers = extractNonIgnoredBuffers(newLayout);
+
+        // 比较缓冲区数量
+        if (oldBuffers.length !== newBuffers.length) {
+            this.log(`Buffer count changed: ${oldBuffers.length} -> ${newBuffers.length}`);
+            return true;
+        }
+
+        // 创建文件路径到缓冲区的映射，以便快速查找
+        const oldBufferMap = new Map<string, TabInfo>();
+        oldBuffers.forEach(buffer => {
+            oldBufferMap.set(buffer.path, buffer);
+        });
+
+        // 检查每个新缓冲区是否存在变化
+        for (const newBuffer of newBuffers) {
+            const oldBuffer = oldBufferMap.get(newBuffer.path);
+            
+            // 新添加的文件
+            if (!oldBuffer) {
+                this.log(`New file added: ${newBuffer.path}`);
+                return true;
+            }
+            
+            // 激活状态变化
+            if (oldBuffer.active !== newBuffer.active) {
+                this.log(`Active state changed for ${newBuffer.path}: ${oldBuffer.active} -> ${newBuffer.active}`);
+                return true;
+            }
+            
+            // 视图状态变化 (光标位置或滚动位置变化)
+            if (oldBuffer.viewState && newBuffer.viewState) {
+                const oldVS = oldBuffer.viewState;
+                const newVS = newBuffer.viewState;
+                
+                // 光标位置变化
+                if (oldVS.cursor.line !== newVS.cursor.line || 
+                    oldVS.cursor.character !== newVS.cursor.character) {
+                    this.log(`Cursor position changed for ${newBuffer.path}`);
+                    return true;
+                }
+                
+                // 滚动位置变化
+                if (oldVS.scroll.topLine !== newVS.scroll.topLine || 
+                    oldVS.scroll.bottomLine !== newVS.scroll.bottomLine) {
+                    this.log(`Scroll position changed for ${newBuffer.path}`);
+                    return true;
+                }
+            } else if (oldBuffer.viewState !== newBuffer.viewState) {
+                // 一个有视图状态而另一个没有
+                this.log(`View state existence changed for ${newBuffer.path}`);
+                return true;
+            }
+        }
+        
+        // 检查窗口结构变化
+        const compareStructure = (oldNode: WindowLayout, newNode: WindowLayout): boolean => {
+            if (oldNode.type !== newNode.type) {
+                return false;
+            }
+            
+            if (oldNode.children && newNode.children) {
+                if (oldNode.children.length !== newNode.children.length) {
+                    return false;
+                }
+                
+                for (let i = 0; i < oldNode.children.length; i++) {
+                    if (!compareStructure(oldNode.children[i], newNode.children[i])) {
+                        return false;
+                    }
+                }
+                
+                return true;
+            }
+            
+            return true;
+        };
+        
+        if (!compareStructure(oldLayout, newLayout)) {
+            this.log("Window structure changed");
+            return true;
+        }
+        
+        return false;
+    }
+
     public syncEditorGroups(): void {
         if (!this.client || this.isProcessingNeovimMessage()) {
             return;
@@ -612,10 +735,17 @@ export class SyncManager {
                 return; // 空布局不发送
             }
             
-            this.sendMessage({
-                type: 'editor_group',
-                data: layout
-            });
+            // 检查与上次布局相比是否有重要变化
+            if (this.hasSignificantChanges(this.lastWindowLayout, layout)) {
+                // 只有当有重要变化时才发送消息
+                this.sendMessage({
+                    type: 'editor_group',
+                    data: layout
+                });
+                
+                // 更新上次布局状态
+                this.lastWindowLayout = JSON.parse(JSON.stringify(layout));
+            }
         });
     }
 
@@ -627,6 +757,28 @@ export class SyncManager {
         // Ignore special files
         if (this.shouldIgnoreFile(filePath)) {
             return;
+        }
+
+        const currentTime = Date.now();
+        const lastSyncTime = this.lastSyncedFiles.get(filePath) || 0;
+        
+        // 如果该文件最近已经同步过（至少1秒内），则跳过
+        if (currentTime - lastSyncTime < 1000) {
+            this.log(`Skipping sync for recently synced file: ${filePath}`);
+            return;
+        }
+        
+        // 更新同步时间
+        this.lastSyncedFiles.set(filePath, currentTime);
+        
+        // 清理过期的文件记录（保持映射表大小合理）
+        if (this.lastSyncedFiles.size > 100) {
+            const expireTime = currentTime - 60000; // 删除1分钟前的记录
+            for (const [path, time] of this.lastSyncedFiles.entries()) {
+                if (time < expireTime) {
+                    this.lastSyncedFiles.delete(path);
+                }
+            }
         }
 
         this.sendMessage({
@@ -656,6 +808,12 @@ export class SyncManager {
             this.client.end();
             this.client = null;
         }
+        
+        // 清除所有缓存
+        this.lastWindowLayout = null;
+        this.lastSyncedFiles.clear();
+        this.messageBuffer = '';
+        
         this.connect();
     }
 
@@ -664,6 +822,11 @@ export class SyncManager {
             this.client.end();
             this.client = null;
         }
+        
+        // 清除所有缓存
+        this.lastWindowLayout = null;
+        this.lastSyncedFiles.clear();
+        this.messageBuffer = '';
         
         for (const disposable of this.disposables) {
             disposable.dispose();
