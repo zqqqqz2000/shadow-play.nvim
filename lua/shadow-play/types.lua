@@ -13,10 +13,11 @@
 ---@field viewState ViewState|nil View state information
 
 ---@class WindowLayout
----@field type "leaf"|"vsplit"|"hsplit"|"auto" Layout type: leaf node (single window) or split type
+---@field type "leaf"|"vsplit"|"hsplit" Layout type: leaf node (single window) or split type
 ---@field buffers TabInfo[] Buffers in the current window (only valid when type is leaf)
 ---@field children WindowLayout[] Child window layouts (only valid when type is vsplit or hsplit)
 ---@field size number|nil Split ratio (number between 0-1, optional)
+---@field active boolean Whether this window is active
 
 ---@class Message
 ---@field type "editor_group"|"buffer_change" Message type
@@ -27,16 +28,6 @@
 ---@field id number Buffer number
 ---@field name string Buffer name
 ---@field active boolean Whether this buffer is active
-
----@class Window
----@field id number Window ID
----@field buffer Buffer Associated buffer
----@field active boolean Whether this window is active
-
----@class Tab
----@field id number Tab page number
----@field windows Window[] Windows in this tab
----@field active boolean Whether this is the active tab
 
 ---@class Position
 ---@field line number

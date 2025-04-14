@@ -148,6 +148,366 @@ local function default_buffer_distribution(buffers, num_windows)
 	return result
 end
 
+---Build window tree recursively from a given window
+---@param current_win number Currently focused window
+---@param all_buffers string[] List of all buffer paths
+---@return WindowLayout
+local function build_window_tree(current_win, all_buffers)
+	-- 首先获取所有的窗口
+	local tab = vim.api.nvim_win_get_tabpage(current_win)
+	local all_wins = vim.api.nvim_tabpage_list_wins(tab)
+	local valid_wins = {}
+	local windows_info = {}
+	local current_win_info = {}
+	
+	-- 收集所有有效窗口的信息
+	for _, win in ipairs(all_wins) do
+		local buf = vim.api.nvim_win_get_buf(win)
+		if not should_ignore_buffer(buf) then
+			local win_info = vim.fn.getwininfo(win)[1]
+			
+			-- 记录窗口信息
+			local info = {
+				id = win,
+				buf = buf,
+				active = (win == current_win),
+				wincol = win_info.wincol,
+				winrow = win_info.winrow,
+				width = win_info.width,
+				height = win_info.height,
+				processed = false
+			}
+			
+			table.insert(valid_wins, win)
+			table.insert(windows_info, info)
+			
+			if win == current_win then
+				current_win_info = info
+			end
+		end
+	end
+	
+	-- 如果只有一个窗口，直接返回叶子节点
+	if #valid_wins == 1 then
+		local win = valid_wins[1]
+		local buf = vim.api.nvim_win_get_buf(win)
+		local path = vim.api.nvim_buf_get_name(buf)
+		local viewState = get_window_view_state(win)
+		
+		return {
+			type = "leaf",
+			buffers = {
+				{
+					path = path,
+					active = true,
+					viewState = viewState
+				}
+			},
+			active = true
+		}
+	end
+	
+	-- 通用函数：根据位置关系将窗口分组
+	---@param windows table[] 窗口信息列表
+	---@param is_same_group function 判断两个窗口是否在同一组的函数
+	---@return table[] 分组后的窗口列表
+	local function group_windows(windows, is_same_group)
+		local groups = {}
+		local processed = {}
+		
+		for i, win in ipairs(windows) do
+			if not processed[i] then
+				local group = {win}
+				processed[i] = true
+				
+				for j = i + 1, #windows do
+					if not processed[j] and is_same_group(win, windows[j]) then
+						table.insert(group, windows[j])
+						processed[j] = true
+					end
+				end
+				
+				table.insert(groups, group)
+			end
+		end
+		
+		return groups
+	end
+	
+	-- 分析窗口水平和垂直关系
+	local function analyze_layout(windows)
+		-- 如果只有一个窗口，返回叶子节点
+		if #windows == 1 then
+			local win = windows[1]
+			win.processed = true
+			
+			local buf = vim.api.nvim_win_get_buf(win.id)
+			local path = vim.api.nvim_buf_get_name(buf)
+			local viewState = get_window_view_state(win.id)
+			
+			return {
+				type = "leaf",
+				buffers = {
+					{
+						path = path,
+						active = win.active,
+						viewState = viewState
+					}
+				},
+				active = win.active
+			}
+		end
+		
+		-- 判断窗口是否在同一行
+		local function same_row(win1, win2)
+			return win1.winrow == win2.winrow
+		end
+		
+		-- 判断窗口是否在同一列
+		local function same_col(win1, win2)
+			return win1.wincol == win2.wincol
+		end
+		
+		-- 尝试垂直分割（同一行的窗口）
+		local row_groups = group_windows(windows, same_row)
+		if #row_groups > 1 then
+			-- 垂直分割成功
+			local children = {}
+			local is_active = false
+			
+			-- 按列排序
+			table.sort(row_groups, function(a, b)
+				return a[1].wincol < b[1].wincol
+			end)
+			
+			-- 为每个组创建子布局
+			local total_width = 0
+			for _, group in ipairs(row_groups) do
+				total_width = total_width + group[1].width
+			end
+			
+			for _, group in ipairs(row_groups) do
+				local child = analyze_layout(group)
+				child.size = group[1].width / total_width
+				table.insert(children, child)
+				if child.active then
+					is_active = true
+				end
+			end
+			
+			return {
+				type = "hsplit",
+				children = children,
+				active = is_active
+			}
+		end
+		
+		-- 尝试水平分割（同一列的窗口）
+		local col_groups = group_windows(windows, same_col)
+		if #col_groups > 1 then
+			-- 水平分割成功
+			local children = {}
+			local is_active = false
+			
+			-- 按行排序
+			table.sort(col_groups, function(a, b)
+				return a[1].winrow < b[1].winrow
+			end)
+			
+			-- 为每个组创建子布局
+			local total_height = 0
+			for _, group in ipairs(col_groups) do
+				total_height = total_height + group[1].height
+			end
+			
+			for _, group in ipairs(col_groups) do
+				local child = analyze_layout(group)
+				child.size = group[1].height / total_height
+				table.insert(children, child)
+				if child.active then
+					is_active = true
+				end
+			end
+			
+			return {
+				type = "vsplit",
+				children = children,
+				active = is_active
+			}
+		end
+		
+		-- 如果无法分割，则创建一个叶子节点（通常不会发生，但作为兜底）
+		log("Unable to determine window layout, defaulting to leaf", vim.log.levels.WARN)
+		local win = windows[1]
+		win.processed = true
+		
+		local buf = vim.api.nvim_win_get_buf(win.id)
+		local path = vim.api.nvim_buf_get_name(buf)
+		local viewState = get_window_view_state(win.id)
+		
+		return {
+			type = "leaf",
+			buffers = {
+				{
+					path = path,
+					active = win.active,
+					viewState = viewState
+				}
+			},
+			active = win.active
+		}
+	end
+	
+	-- 分析窗口布局并生成树结构
+	local layout = analyze_layout(windows_info)
+	
+	-- 为叶子节点分配所有可用的缓冲区
+	local function assign_buffers(node, buffers)
+		if node.type == "leaf" then
+			-- 如果当前只有一个buffer，并且是active的，需要将其他buffer也加入
+			local active_path = node.buffers[1].path
+			node.buffers = {}
+			
+			-- 将所有buffer添加到这个节点，确保原来的active buffer仍然是active
+			for _, buf_path in ipairs(buffers) do
+				table.insert(node.buffers, {
+					path = buf_path,
+					active = (buf_path == active_path),
+					viewState = nil -- 非活动buffer没有视图状态
+				})
+			end
+		else
+			-- 递归处理子节点
+			for _, child in ipairs(node.children) do
+				assign_buffers(child, buffers)
+			end
+		end
+	end
+	
+	-- 如果enable_buffer_distribution为true，则将所有可用buffer分配给叶子节点
+	if buffer_distribution_algorithm then
+		local leaf_count = 0
+		local function count_leaves(node)
+			if node.type == "leaf" then
+				leaf_count = leaf_count + 1
+			else
+				for _, child in ipairs(node.children) do
+					count_leaves(child)
+				end
+			end
+		end
+		count_leaves(layout)
+		
+		-- 将buffer分配给各个窗口
+		local distributed_buffers = buffer_distribution_algorithm(all_buffers, leaf_count)
+		
+		-- 递归分配buffer
+		local leaf_index = 1
+		local function assign_distributed_buffers(node)
+			if node.type == "leaf" then
+				local active_path = node.buffers[1].path
+				node.buffers = {}
+				
+				-- 将分配的buffer添加到这个节点
+				for _, buf_path in ipairs(distributed_buffers[leaf_index] or {}) do
+					table.insert(node.buffers, {
+						path = buf_path,
+						active = (buf_path == active_path),
+						viewState = nil
+					})
+				end
+				leaf_index = leaf_index + 1
+			else
+				for _, child in ipairs(node.children) do
+					assign_distributed_buffers(child)
+				end
+			end
+		end
+		assign_distributed_buffers(layout)
+	else
+		-- 默认情况下，将所有buffer分配给每个叶子节点
+		assign_buffers(layout, all_buffers)
+	end
+	
+	return layout
+end
+
+---Get current tab page window information
+---@return WindowLayout
+local function get_windows_info()
+	log("Getting current windows information...", vim.log.levels.DEBUG)
+	local current_tab = vim.api.nvim_get_current_tabpage()
+	local wins = vim.api.nvim_tabpage_list_wins(current_tab)
+	local current_win = vim.api.nvim_get_current_win()
+	log(string.format("Found %d total windows in current tab", #wins), vim.log.levels.DEBUG)
+
+	local valid_wins = {}
+	local all_buffers = {}
+
+	-- Collect all valid windows
+	for _, win in ipairs(wins) do
+		local buf = vim.api.nvim_win_get_buf(win)
+		local buf_name = vim.api.nvim_buf_get_name(buf)
+		if not should_ignore_buffer(buf) then
+			table.insert(valid_wins, win)
+			log(string.format("Added valid window %d with buffer '%s'", win, buf_name), vim.log.levels.DEBUG)
+		else
+			log(string.format("Ignoring window %d with buffer '%s'", win, buf_name), vim.log.levels.DEBUG)
+		end
+	end
+	log(string.format("Found %d valid windows after filtering", #valid_wins), vim.log.levels.DEBUG)
+
+	-- Collect all open buffers
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		local name = vim.api.nvim_buf_get_name(buf)
+		if not should_ignore_buffer(buf) then
+			if name ~= "" then
+				table.insert(all_buffers, name)
+				log(string.format("Added valid buffer '%s'", name), vim.log.levels.DEBUG)
+			end
+		else
+			log(string.format("Ignoring buffer '%s'", name), vim.log.levels.DEBUG)
+		end
+	end
+	log(string.format("Found %d valid buffers after filtering", #all_buffers), vim.log.levels.DEBUG)
+
+	-- If there are no valid windows, return empty layout
+	if #valid_wins == 0 then
+		log("No valid windows found, returning empty layout", vim.log.levels.DEBUG)
+		return {
+			type = "leaf",
+			buffers = {},
+			active = true,
+		}
+	end
+	
+	-- Build window tree recursively starting from root window
+	local window_tree = build_window_tree(current_win, all_buffers)
+	return window_tree
+end
+
+---Send message to VSCode/Cursor
+---@param msg Message
+---@param callback? function Called when message is sent
+local function send_message(msg, callback)
+	if not client then
+		log("No client connected, cannot send message", vim.log.levels.WARN)
+		return
+	end
+
+	log(string.format("Sending message of type '%s'", msg.type), vim.log.levels.DEBUG)
+	local json = vim.json.encode(msg)
+	log(string.format("Sending data: %s", json), vim.log.levels.DEBUG)
+
+	-- Add \0 as message terminator
+	client:write(json .. "\0")
+	log("Message sent successfully", vim.log.levels.DEBUG)
+	if callback then
+		callback()
+	end
+end
+
+
 ---Get window split type
 ---@param win number Window ID
 ---@return string "leaf"|"vsplit"|"hsplit"
@@ -176,155 +536,6 @@ local function get_window_split_type(win)
 	end
 
 	return "leaf"
-end
-
----Get child windows
----@param win number Window ID
----@return number[] List of child window IDs
-local function get_window_children(win)
-	local children = {}
-	local wins = vim.api.nvim_tabpage_list_wins(0)
-	local win_info = vim.fn.getwininfo(win)[1]
-
-	for _, w in ipairs(wins) do
-		if w ~= win then
-			local info = vim.fn.getwininfo(w)[1]
-			-- Check if it's an adjacent window
-			if info.winrow == win_info.winrow or info.wincol == win_info.wincol then
-				table.insert(children, w)
-			end
-		end
-	end
-
-	return children
-end
-
----Get current tab page window information
----@return WindowLayout
-local function get_windows_info()
-	log("Getting current windows information...", vim.log.levels.DEBUG)
-	local current_tab = vim.api.nvim_get_current_tabpage()
-	local wins = vim.api.nvim_tabpage_list_wins(current_tab)
-	log(string.format("Found %d total windows in current tab", #wins), vim.log.levels.DEBUG)
-
-	local active_windows = {}
-	local all_buffers = {}
-
-	-- Collect all valid windows
-	for _, win in ipairs(wins) do
-		local buf = vim.api.nvim_win_get_buf(win)
-		local buf_name = vim.api.nvim_buf_get_name(buf)
-		if not should_ignore_buffer(buf) then
-			table.insert(active_windows, win)
-			log(string.format("Added valid window %d with buffer '%s'", win, buf_name), vim.log.levels.DEBUG)
-		else
-			log(string.format("Ignoring window %d with buffer '%s'", win, buf_name), vim.log.levels.DEBUG)
-		end
-	end
-	log(string.format("Found %d valid windows after filtering", #active_windows), vim.log.levels.DEBUG)
-
-	-- Collect all open buffers
-	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		local name = vim.api.nvim_buf_get_name(buf)
-		if not should_ignore_buffer(buf) then
-			if name ~= "" then
-				table.insert(all_buffers, name)
-				log(string.format("Added valid buffer '%s'", name), vim.log.levels.DEBUG)
-			end
-		else
-			log(string.format("Ignoring buffer '%s'", name), vim.log.levels.DEBUG)
-		end
-	end
-	log(string.format("Found %d valid buffers after filtering", #all_buffers), vim.log.levels.DEBUG)
-
-	-- If there's only one window, return a leaf node
-	if #active_windows == 1 then
-		local win = active_windows[1]
-		local window_buffers = {}
-		local current_buf = vim.api.nvim_win_get_buf(win)
-		local current_buf_name = vim.api.nvim_buf_get_name(current_buf)
-
-		-- Add all buffers to the window
-		for _, buf_path in ipairs(all_buffers) do
-			local info = {
-				path = buf_path,
-				active = buf_path == current_buf_name,
-				viewState = buf_path == current_buf_name and get_window_view_state(win) or nil,
-			}
-			log(string.format("Single window mode: buffer '%s' active=%s", buf_path, info.active), vim.log.levels.DEBUG)
-			table.insert(window_buffers, info)
-		end
-
-		log("Returning single window leaf node", vim.log.levels.DEBUG)
-		return {
-			type = "leaf",
-			buffers = window_buffers,
-		}
-	end
-
-	-- For multiple windows, determine split type based on first window
-	local split_type = get_window_split_type(active_windows[1])
-	log(string.format("Multiple windows detected, split type: %s", split_type), vim.log.levels.DEBUG)
-
-	local children = {}
-	for i, win in ipairs(active_windows) do
-		local window_buffers = {}
-		local current_buf = vim.api.nvim_win_get_buf(win)
-		local current_buf_name = vim.api.nvim_buf_get_name(current_buf)
-
-		log(string.format("Processing window %d/%d", i, #active_windows), vim.log.levels.DEBUG)
-
-		-- Add all buffers to each window
-		for _, buf_path in ipairs(all_buffers) do
-			local info = {
-				path = buf_path,
-				active = buf_path == current_buf_name,
-				viewState = buf_path == current_buf_name and get_window_view_state(win) or nil,
-			}
-			if info.active then
-				log(string.format("Window %d: Active buffer '%s' with view state", win, buf_path), vim.log.levels.DEBUG)
-			else
-				log(string.format("Window %d: Inactive buffer '%s'", win, buf_path), vim.log.levels.DEBUG)
-			end
-			table.insert(window_buffers, info)
-		end
-
-		if #window_buffers > 0 then
-			log(string.format("Adding window %d with %d buffers", win, #window_buffers), vim.log.levels.DEBUG)
-			table.insert(children, {
-				type = "leaf",
-				buffers = window_buffers,
-				size = 1 / #active_windows, -- Equal space distribution
-			})
-		end
-	end
-
-	log(string.format("Final layout: type=%s with %d children", split_type, #children), vim.log.levels.DEBUG)
-	return {
-		type = split_type,
-		children = children,
-	}
-end
-
----Send message to VSCode/Cursor
----@param msg Message
----@param callback? function Called when message is sent
-local function send_message(msg, callback)
-	if not client then
-		log("No client connected, cannot send message", vim.log.levels.WARN)
-		return
-	end
-
-	log(string.format("Sending message of type '%s'", msg.type), vim.log.levels.DEBUG)
-	local json = vim.json.encode(msg)
-	log(string.format("Sending data: %s", json), vim.log.levels.DEBUG)
-
-	-- Add \0 as message terminator
-	client:write(json .. "\0")
-	log("Message sent successfully", vim.log.levels.DEBUG)
-	if callback then
-		callback()
-	end
 end
 
 ---Handle buffer change from VSCode
@@ -415,169 +626,6 @@ local function sync_window_layout(layout, win)
 			vim.cmd("new")
 			win = vim.api.nvim_get_current_win()
 			return sync_window_layout(layout, win)
-		end
-
-		-- Special handling for auto type layout
-		if layout.type == "auto" then
-			-- Compare window counts
-			local layout_window_count = #layout.children
-			if layout_window_count ~= #valid_wins then
-				-- 窗口数量不匹配，但我们尝试重建布局而不是中止
-				log(
-					string.format(
-						"Window count mismatch: Vim has %d windows but VSCode has %d windows. Rebuilding layout.",
-						#valid_wins,
-						layout_window_count
-					),
-					vim.log.levels.DEBUG
-				)
-				
-				-- 保留第一个窗口，关闭其它窗口
-				win = valid_wins[1]
-				for i = 2, #valid_wins do
-					if vim.api.nvim_win_is_valid(valid_wins[i]) then
-						vim.api.nvim_win_close(valid_wins[i], true)
-					end
-				end
-				
-				-- 如果VSCode有多个窗口，我们需要创建对应数量的分割
-				if layout_window_count > 1 then
-					-- 确定是水平还是垂直分割
-					local split_type
-					if layout.children[1].type == "leaf" and layout.children[2].type == "leaf" then
-						-- 如果子窗口都是叶子节点，我们需要确定分割类型
-						-- 这里简单地默认为垂直分割，实际应用中可能需要更智能的判断
-						split_type = "vsplit"
-					else
-						-- 否则使用第一个非叶子节点的类型
-						for _, child in ipairs(layout.children) do
-							if child.type ~= "leaf" then
-								split_type = child.type
-								break
-							end
-						end
-						-- 默认为垂直分割
-						split_type = split_type or "vsplit"
-					end
-					
-					-- 创建窗口分割
-					vim.api.nvim_set_current_win(win)
-					for i = 2, layout_window_count do
-						if split_type == "vsplit" then
-							vim.cmd("vsplit")
-						else
-							vim.cmd("split")
-						end
-					end
-					
-					-- 重新获取窗口列表
-					wins = vim.api.nvim_tabpage_list_wins(current_tab)
-					valid_wins = {}
-					for _, w in ipairs(wins) do
-						local buf = vim.api.nvim_win_get_buf(w)
-						if not should_ignore_buffer(buf) then
-							table.insert(valid_wins, w)
-						end
-					end
-				end
-				
-				-- 现在重新同步内容
-				for i, child_layout in ipairs(layout.children) do
-					if i <= #valid_wins and child_layout.buffers then
-						local current_win = valid_wins[i]
-						
-						-- 确保所有 buffer 都已加载
-						for _, buf_info in ipairs(child_layout.buffers) do
-							local bufnr = vim.fn.bufnr(buf_info.path)
-							if bufnr == -1 then
-								bufnr = vim.fn.bufadd(buf_info.path)
-								vim.bo[bufnr].buflisted = true
-							end
-						end
-						
-						-- 设置激活的 buffer
-						local active_buffer = nil
-						for _, buf_info in ipairs(child_layout.buffers) do
-							if buf_info.active then
-								active_buffer = vim.fn.bufnr(buf_info.path)
-								-- 设置 buffer 并更新视图状态
-								vim.api.nvim_win_set_buf(current_win, active_buffer)
-								if buf_info.viewState then
-									update_window_view(current_win, buf_info.viewState)
-								end
-								break
-							end
-						end
-						
-						-- 如果没有激活的 buffer，使用第一个
-						if not active_buffer and #child_layout.buffers > 0 then
-							local first_buf = child_layout.buffers[1]
-							active_buffer = vim.fn.bufnr(first_buf.path)
-							vim.api.nvim_win_set_buf(current_win, active_buffer)
-							if first_buf.viewState then
-								update_window_view(current_win, first_buf.viewState)
-							end
-						end
-					end
-				end
-				
-				-- 设置窗口大小
-				if #valid_wins > 1 then
-					local total_size = (layout.type == "vsplit") and vim.o.columns or vim.o.lines
-					for i, w in ipairs(valid_wins) do
-						if i < #valid_wins and layout.children[i].size and vim.api.nvim_win_is_valid(w) then
-							local size = math.floor(total_size * layout.children[i].size)
-							if layout.type == "vsplit" then
-								vim.api.nvim_win_set_width(w, size)
-							else
-								vim.api.nvim_win_set_height(w, size)
-							end
-						end
-					end
-				end
-				
-				return valid_wins[1]
-			end
-
-			-- Window counts match, sync content to each window
-			for i, win in ipairs(valid_wins) do
-				local child_layout = layout.children[i]
-				if child_layout and child_layout.buffers then
-					-- 确保所有 buffer 都已加载
-					for _, buf_info in ipairs(child_layout.buffers) do
-						local bufnr = vim.fn.bufnr(buf_info.path)
-						if bufnr == -1 then
-							bufnr = vim.fn.bufadd(buf_info.path)
-							vim.bo[bufnr].buflisted = true
-						end
-					end
-
-					-- 设置激活的 buffer
-					local active_buffer = nil
-					for _, buf_info in ipairs(child_layout.buffers) do
-						if buf_info.active then
-							active_buffer = vim.fn.bufnr(buf_info.path)
-							-- 设置 buffer 并更新视图状态
-							vim.api.nvim_win_set_buf(win, active_buffer)
-							if buf_info.viewState then
-								update_window_view(win, buf_info.viewState)
-							end
-							break
-						end
-					end
-
-					-- 如果没有激活的 buffer，使用第一个
-					if not active_buffer and #child_layout.buffers > 0 then
-						local first_buf = child_layout.buffers[1]
-						active_buffer = vim.fn.bufnr(first_buf.path)
-						vim.api.nvim_win_set_buf(win, active_buffer)
-						if first_buf.viewState then
-							update_window_view(win, first_buf.viewState)
-						end
-					end
-				end
-			end
-			return valid_wins[1]
 		end
 
 		-- Compare existing window layout with target layout
