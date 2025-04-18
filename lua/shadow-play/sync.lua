@@ -232,222 +232,190 @@ local function build_window_tree(current_win, all_buffers)
 			}
 		end
 		
-		-- 尝试水平分割（找到贯通的水平切线）
-		local function try_horizontal_split(wins)
-			-- 计算所有窗口的行范围
-			local row_ranges = {}
-			for _, win in ipairs(wins) do
-				table.insert(row_ranges, {
-					start = win.winrow,
-					finish = win.winrow + win.height - 1,
-					win = win
-				})
-			end
+		-- 创建叶子节点的辅助函数
+		---@param win table 窗口信息
+		---@param active boolean 是否激活
+		---@return table 窗口布局
+		local function create_leaf_node(win, active)
+			local buf = vim.api.nvim_win_get_buf(win.id)
+			local path = vim.api.nvim_buf_get_name(buf)
+			local viewState = get_window_view_state(win.id)
 			
-			-- 排序所有可能的水平切线位置（行号）
-			local potential_splits = {}
-			for _, range in ipairs(row_ranges) do
-				-- 每个窗口的底部行号+1可能是一个切线位置
-				table.insert(potential_splits, range.finish + 1)
-			end
-			
-			-- 排序切线位置
-			table.sort(potential_splits)
-			
-			-- 检查每个切线是否是贯通的
-			for _, split_line in ipairs(potential_splits) do
-				local is_through = true
-				
-				-- 检查这条切线是否穿过任何窗口
-				for _, range in ipairs(row_ranges) do
-					-- 如果切线位置在窗口范围内部（不是边界），则不是贯通的
-					if split_line > range.start and split_line <= range.finish then
-						is_through = false
-						break
-					end
-				end
-				
-				-- 如果是贯通的切线，将窗口分成两组
-				if is_through then
-					local group1 = {}
-					local group2 = {}
-					
-					for _, win in ipairs(wins) do
-						if win.winrow + win.height - 1 < split_line then
-							table.insert(group1, win)
-						else
-							table.insert(group2, win)
-						end
-					end
-					
-					-- 确保两个组都有窗口
-					if #group1 > 0 and #group2 > 0 then
-						-- 创建vsplit布局（水平分割）
-						local children = {}
-						local is_active = false
-						
-						-- 计算总高度
-						local min_row, max_row = math.huge, -math.huge
-						for _, win in ipairs(wins) do
-							min_row = math.min(min_row, win.winrow)
-							max_row = math.max(max_row, win.winrow + win.height - 1)
-						end
-						local total_height = max_row - min_row + 1
-						
-						-- 对这两个组分别递归处理
-						local child1 = group_windows(group1)
-						local child2 = group_windows(group2)
-						
-						-- 计算每个组的高度占比
-						local group1_height = 0
-						for _, win in ipairs(group1) do
-							group1_height = group1_height + win.height
-						end
-						group1_height = group1_height / #group1
-						
-						local group2_height = 0
-						for _, win in ipairs(group2) do
-							group2_height = group2_height + win.height
-						end
-						group2_height = group2_height / #group2
-						
-						-- 设置子节点尺寸并添加到children
-						child1.size = group1_height / total_height
-						child2.size = group2_height / total_height
-						
-						table.insert(children, child1)
-						table.insert(children, child2)
-						
-						-- 检查是否存在活动窗口
-						if child1.active or child2.active then
-							is_active = true
-						end
-						
-						return {
-							type = "vsplit",
-							children = children,
-							active = is_active
-						}
-					end
-				end
-			end
-			
-			-- 没有找到贯通的水平切线
-			return nil
+			return {
+				type = "leaf",
+				buffers = {
+					{
+						path = path,
+						active = active,
+						viewState = viewState
+					}
+				},
+				active = active
+			}
 		end
 		
-		-- 尝试垂直分割（找到贯通的垂直切线）
-		local function try_vertical_split(wins)
-			-- 计算所有窗口的列范围
-			local col_ranges = {}
+		-- 计算窗口组的大小信息
+		---@param group table[] 窗口组
+		---@param dimension string "width"|"height" 计算的维度
+		---@return number 平均大小
+		local function calculate_group_size(group, dimension)
+			local total = 0
+			for _, win in ipairs(group) do
+				total = total + win[dimension]
+			end
+			return total / #group
+		end
+		
+		-- 检查窗口组是否有激活窗口
+		---@param group table[] 窗口组
+		---@return boolean 是否包含激活窗口
+		local function has_active_window(group)
+			for _, win in ipairs(group) do
+				if win.active then
+					return true
+				end
+			end
+			return false
+		end
+		
+		-- 尝试沿某个方向分割窗口
+		---@param wins table[] 窗口列表
+		---@param is_vertical boolean 是否为垂直分割
+		---@return table|nil 分割结果
+		local function try_split(wins, is_vertical)
+			-- 确定基于哪个维度进行分割
+			local pos_attr = is_vertical and "wincol" or "winrow"
+			local size_attr = is_vertical and "width" or "height"
+			local split_type = is_vertical and "vsplit" or "hsplit"
+			
+			-- 计算所有窗口的范围
+			local ranges = {}
 			for _, win in ipairs(wins) do
-				table.insert(col_ranges, {
-					start = win.wincol,
-					finish = win.wincol + win.width - 1,
+				table.insert(ranges, {
+					start = win[pos_attr],
+					finish = win[pos_attr] + win[size_attr] - 1,
 					win = win
 				})
 			end
 			
-			-- 排序所有可能的垂直切线位置（列号）
+			-- 收集所有可能的切线位置
 			local potential_splits = {}
-			for _, range in ipairs(col_ranges) do
-				-- 每个窗口的右侧列号+1可能是一个切线位置
+			for _, range in ipairs(ranges) do
 				table.insert(potential_splits, range.finish + 1)
 			end
 			
 			-- 排序切线位置
 			table.sort(potential_splits)
 			
+			-- 存储所有贯通切线位置
+			local through_lines = {}
+			
 			-- 检查每个切线是否是贯通的
 			for _, split_line in ipairs(potential_splits) do
 				local is_through = true
 				
 				-- 检查这条切线是否穿过任何窗口
-				for _, range in ipairs(col_ranges) do
-					-- 如果切线位置在窗口范围内部（不是边界），则不是贯通的
+				for _, range in ipairs(ranges) do
 					if split_line > range.start and split_line <= range.finish then
 						is_through = false
 						break
 					end
 				end
 				
-				-- 如果是贯通的切线，将窗口分成两组
+				-- 如果是贯通的切线，添加到列表
 				if is_through then
-					local group1 = {}
-					local group2 = {}
-					
-					for _, win in ipairs(wins) do
-						if win.wincol + win.width - 1 < split_line then
-							table.insert(group1, win)
-						else
-							table.insert(group2, win)
-						end
-					end
-					
-					-- 确保两个组都有窗口
-					if #group1 > 0 and #group2 > 0 then
-						-- 创建hsplit布局（垂直分割）
-						local children = {}
-						local is_active = false
-						
-						-- 计算总宽度
-						local min_col, max_col = math.huge, -math.huge
-						for _, win in ipairs(wins) do
-							min_col = math.min(min_col, win.wincol)
-							max_col = math.max(max_col, win.wincol + win.width - 1)
-						end
-						local total_width = max_col - min_col + 1
-						
-						-- 对这两个组分别递归处理
-						local child1 = group_windows(group1)
-						local child2 = group_windows(group2)
-						
-						-- 计算每个组的宽度占比
-						local group1_width = 0
-						for _, win in ipairs(group1) do
-							group1_width = group1_width + win.width
-						end
-						group1_width = group1_width / #group1
-						
-						local group2_width = 0
-						for _, win in ipairs(group2) do
-							group2_width = group2_width + win.width
-						end
-						group2_width = group2_width / #group2
-						
-						-- 设置子节点尺寸并添加到children
-						child1.size = group1_width / total_width
-						child2.size = group2_width / total_width
-						
-						table.insert(children, child1)
-						table.insert(children, child2)
-						
-						-- 检查是否存在活动窗口
-						if child1.active or child2.active then
-							is_active = true
-						end
-						
-						return {
-							type = "hsplit",
-							children = children,
-							active = is_active
-						}
-					end
+					table.insert(through_lines, split_line)
 				end
 			end
 			
-			-- 没有找到贯通的垂直切线
-			return nil
+			-- 如果没有找到贯通切线，返回nil
+			if #through_lines == 0 then
+				return nil
+			end
+			
+			-- 根据切线划分窗口组
+			local window_groups = {}
+			
+			-- 添加第一组（位于第一条切线之前的窗口）
+			local first_group = {}
+			for _, win in ipairs(wins) do
+				if win[pos_attr] + win[size_attr] - 1 < through_lines[1] then
+					table.insert(first_group, win)
+				end
+			end
+			
+			if #first_group > 0 then
+				table.insert(window_groups, first_group)
+			end
+			
+			-- 添加中间的组（位于两条切线之间的窗口）
+			for i = 1, #through_lines do
+				local current_line = through_lines[i]
+				local next_line = (i < #through_lines) and through_lines[i + 1] or nil
+				
+				local group = {}
+				for _, win in ipairs(wins) do
+					local win_start = win[pos_attr]
+					local win_end = win[pos_attr] + win[size_attr] - 1
+					
+					if win_start >= current_line and (next_line == nil or win_end < next_line) then
+						table.insert(group, win)
+					end
+				end
+				
+				if #group > 0 then
+					table.insert(window_groups, group)
+				end
+			end
+			
+			-- 如果只有一个组，那么就不需要分割
+			if #window_groups <= 1 then
+				return nil
+			end
+			
+			-- 计算总尺寸
+			local min_pos, max_pos = math.huge, -math.huge
+			for _, win in ipairs(wins) do
+				min_pos = math.min(min_pos, win[pos_attr])
+				max_pos = math.max(max_pos, win[pos_attr] + win[size_attr] - 1)
+			end
+			local total_size = max_pos - min_pos + 1
+			
+			-- 递归处理每个窗口组
+			local children = {}
+			local is_active = false
+			
+			for _, group in ipairs(window_groups) do
+				local child = group_windows(group)
+				
+				-- 计算组的尺寸占比
+				local group_size = calculate_group_size(group, size_attr)
+				child.size = group_size / total_size
+				
+				-- 检查是否有活动窗口
+				if has_active_window(group) then
+					is_active = true
+				end
+				
+				table.insert(children, child)
+			end
+			
+			-- 构建多窗口分割结果
+			return {
+				type = split_type,
+				children = children,
+				active = is_active
+			}
 		end
 		
 		-- 先尝试垂直分割（hsplit）
-		local v_split = try_vertical_split(windows)
+		local v_split = try_split(windows, true)
 		if v_split then
 			return v_split
 		end
 		
 		-- 如果垂直分割失败，尝试水平分割（vsplit）
-		local h_split = try_horizontal_split(windows)
+		local h_split = try_split(windows, false)
 		if h_split then
 			return h_split
 		end
@@ -455,62 +423,21 @@ local function build_window_tree(current_win, all_buffers)
 		-- 如果都无法找到贯通的切线，则可能是无法分割的场景
 		if #windows == 1 then
 			-- 只有一个窗口，返回叶子节点
-			local win = windows[1]
-			local buf = vim.api.nvim_win_get_buf(win.id)
-			local path = vim.api.nvim_buf_get_name(buf)
-			local viewState = get_window_view_state(win.id)
-			
-			return {
-				type = "leaf",
-				buffers = {
-					{
-						path = path,
-						active = win.active,
-						viewState = viewState
-					}
-				},
-				active = win.active
-			}
+			return create_leaf_node(windows[1], windows[1].active)
 		else
 			-- 异常情况：有多个窗口但无法找到贯通切线
 			log(string.format("警告：找到%d个窗口但无法确定分割方式，使用第一个窗口作为叶子节点", #windows), vim.log.levels.WARN)
 			
-			-- 使用第一个窗口
-			local win = windows[1]
-			local buf = vim.api.nvim_win_get_buf(win.id)
-			local path = vim.api.nvim_buf_get_name(buf)
-			local viewState = get_window_view_state(win.id)
-			
 			-- 检查是否有活动窗口
-			local has_active = false
-			for _, w in ipairs(windows) do
-				if w.active then
-					has_active = true
-					break
-				end
-			end
+			local has_active = has_active_window(windows)
 			
-			return {
-				type = "leaf",
-				buffers = {
-					{
-						path = path,
-						active = has_active,
-						viewState = viewState
-					}
-				},
-				active = has_active
-			}
+			-- 使用第一个窗口
+			return create_leaf_node(windows[1], has_active)
 		end
 	end
 	
 	-- 分析窗口布局并生成树结构
-	local function analyze_layout(windows)
-		return group_windows(windows)
-	end
-	
-	-- 分析窗口布局并生成树结构
-	local layout = analyze_layout(windows_info)
+	local layout = group_windows(windows_info)
 	
 	-- 为叶子节点分配所有可用的缓冲区
 	local function assign_buffers(node, buffers)
@@ -1110,3 +1037,4 @@ function M.sync_buffer()
 end
 
 return M
+
