@@ -165,6 +165,7 @@ local function build_window_tree(current_win, all_buffers)
 		local buf = vim.api.nvim_win_get_buf(win)
 		if not should_ignore_buffer(buf) then
 			local win_info = vim.fn.getwininfo(win)[1]
+			local viewState = get_window_view_state(win)
 			
 			-- 记录窗口信息
 			local info = {
@@ -175,7 +176,9 @@ local function build_window_tree(current_win, all_buffers)
 				winrow = win_info.winrow,
 				width = win_info.width,
 				height = win_info.height,
-				processed = false
+				processed = false,
+				viewState = viewState,
+				bufname = vim.api.nvim_buf_get_name(buf)
 			}
 			
 			table.insert(valid_wins, win)
@@ -215,17 +218,13 @@ local function build_window_tree(current_win, all_buffers)
 		if #windows == 1 then
 			local win = windows[1]
 			
-			local buf = vim.api.nvim_win_get_buf(win.id)
-			local path = vim.api.nvim_buf_get_name(buf)
-			local viewState = get_window_view_state(win.id)
-			
 			return {
 				type = "leaf",
 				buffers = {
 					{
-						path = path,
+						path = win.bufname,
 						active = win.active,
-						viewState = viewState
+						viewState = win.viewState
 					}
 				},
 				active = win.active
@@ -237,17 +236,13 @@ local function build_window_tree(current_win, all_buffers)
 		---@param active boolean 是否激活
 		---@return table 窗口布局
 		local function create_leaf_node(win, active)
-			local buf = vim.api.nvim_win_get_buf(win.id)
-			local path = vim.api.nvim_buf_get_name(buf)
-			local viewState = get_window_view_state(win.id)
-			
 			return {
 				type = "leaf",
 				buffers = {
 					{
-						path = path,
+						path = win.bufname,
 						active = active,
-						viewState = viewState
+						viewState = win.viewState
 					}
 				},
 				active = active
@@ -443,7 +438,9 @@ local function build_window_tree(current_win, all_buffers)
 	local function assign_buffers(node, buffers)
 		if node.type == "leaf" then
 			-- 如果当前只有一个buffer，并且是active的，需要将其他buffer也加入
-			local active_path = node.buffers[1].path
+			local active_buffer = node.buffers[1]
+			local active_path = active_buffer.path
+			local active_viewState = active_buffer.viewState
 			node.buffers = {}
 			
 			-- 将所有buffer添加到这个节点，确保原来的active buffer仍然是active
@@ -451,7 +448,8 @@ local function build_window_tree(current_win, all_buffers)
 				table.insert(node.buffers, {
 					path = buf_path,
 					active = (buf_path == active_path),
-					viewState = nil -- 非活动buffer没有视图状态
+					-- 只有活动buffer保留viewState
+					viewState = (buf_path == active_path) and active_viewState or nil
 				})
 			end
 		else
@@ -483,7 +481,9 @@ local function build_window_tree(current_win, all_buffers)
 		local leaf_index = 1
 		local function assign_distributed_buffers(node)
 			if node.type == "leaf" then
-				local active_path = node.buffers[1].path
+				local active_buffer = node.buffers[1]
+				local active_path = active_buffer.path
+				local active_viewState = active_buffer.viewState
 				node.buffers = {}
 				
 				-- 将分配的buffer添加到这个节点
@@ -491,7 +491,8 @@ local function build_window_tree(current_win, all_buffers)
 					table.insert(node.buffers, {
 						path = buf_path,
 						active = (buf_path == active_path),
-						viewState = nil
+						-- 只有活动buffer保留viewState
+						viewState = (buf_path == active_path) and active_viewState or nil
 					})
 				end
 				leaf_index = leaf_index + 1

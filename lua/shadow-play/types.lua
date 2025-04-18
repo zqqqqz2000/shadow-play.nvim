@@ -24,11 +24,6 @@
 ---@field data WindowLayout|{ path: string, viewState: ViewState|nil } Message data
 ---@field from_nvim boolean Whether the message is from the nvim side plugin
 
----@class Buffer
----@field id number Buffer number
----@field name string Buffer name
----@field active boolean Whether this buffer is active
-
 ---@class Position
 ---@field line number
 ---@field character number
